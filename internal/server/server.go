@@ -1,6 +1,10 @@
 package server
 
 import (
+	"firmguard/internal/api"
+	"firmguard/internal/database"
+	"firmguard/internal/repository"
+	"firmguard/internal/service"
 	"fmt"
 	"net/http"
 	"os"
@@ -8,22 +12,27 @@ import (
 	"time"
 
 	_ "github.com/joho/godotenv/autoload"
-
-	"firmguard/internal/database"
 )
 
 type Server struct {
 	port int
 
-	db database.Service
+	db      database.Service
+	scanHdl *api.FirmwareScanHandler
 }
 
 func NewServer() *http.Server {
 	port, _ := strconv.Atoi(os.Getenv("PORT"))
+	db := database.New()
+	scanRepo := repository.NewFirmwareScanRepository(db.GetDB())
+	scanSvc := service.NewFirmwareScanService(scanRepo)
+	scanHdl := api.NewFirmwareScanHandler(scanSvc)
+
 	NewServer := &Server{
 		port: port,
 
-		db: database.New(),
+		db:      db,
+		scanHdl: scanHdl,
 	}
 
 	// Declare Server config

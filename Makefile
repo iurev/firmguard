@@ -1,64 +1,62 @@
-# Simple Makefile for a Go project
+ifneq (,$(wildcard ./.env))
+    include .env
+    export
+endif
 
-# Build the application
-all: build test
+.PHONY: all build run docker-run docker-down itest watch test coverage fmt race clean migrate-up migrate-down
+
+all: build
 
 build:
-	@echo "Building..."
-	
-	
 	@go build -o main cmd/api/main.go
 
-# Run the application
 run:
 	@go run cmd/api/main.go
-# Create DB container
+
 docker-run:
-	@if docker compose up --build 2>/dev/null; then \
-		: ; \
-	else \
-		echo "Falling back to Docker Compose V1"; \
-		docker-compose up --build; \
-	fi
+	@docker compose up -d
+	@echo "Waiting for database to be ready..."
+	@sleep 2
+	@$(MAKE) migrate-up
 
-# Shutdown DB container
 docker-down:
-	@if docker compose down 2>/dev/null; then \
-		: ; \
-	else \
-		echo "Falling back to Docker Compose V1"; \
-		docker-compose down; \
-	fi
+	@docker compose down
 
-# Test the application
-test:
-	@echo "Testing..."
-	@go test ./... -v
-# Integrations Tests for the application
+migrate-up:
+	@goose -dir migrations postgres "postgres://$(BLUEPRINT_DB_USERNAME):$(BLUEPRINT_DB_PASSWORD)@$(BLUEPRINT_DB_HOST):$(BLUEPRINT_DB_PORT)/$(BLUEPRINT_DB_DATABASE)?sslmode=disable&search_path=$(BLUEPRINT_DB_SCHEMA)" up
+
+migrate-down:
+	@goose -dir migrations postgres "postgres://$(BLUEPRINT_DB_USERNAME):$(BLUEPRINT_DB_PASSWORD)@$(BLUEPRINT_DB_HOST):$(BLUEPRINT_DB_PORT)/$(BLUEPRINT_DB_DATABASE)?sslmode=disable&search_path=$(BLUEPRINT_DB_SCHEMA)" down
+
 itest:
-	@echo "Running integration tests..."
-	@go test ./internal/database -v
+	@go test -v ./internal/database/...
 
-# Clean the binary
-clean:
-	@echo "Cleaning..."
-	@rm -f main
-
-# Live Reload
 watch:
 	@if command -v air > /dev/null; then \
-            air; \
-            echo "Watching...";\
-        else \
-            read -p "Go's 'air' is not installed on your machine. Do you want to install it? [Y/n] " choice; \
-            if [ "$$choice" != "n" ] && [ "$$choice" != "N" ]; then \
-                go install github.com/air-verse/air@latest; \
-                air; \
-                echo "Watching...";\
-            else \
-                echo "You chose not to install air. Exiting..."; \
-                exit 1; \
-            fi; \
-        fi
+	    air; \
+	else \
+	    read -p "Go's 'air' is not installed on your machine. Do you want to install it? [y/N] " choice; \
+	    if [ "$$choice" = "y" ] || [ "$$choice" = "Y" ]; then \
+	        go install github.com/air-verse/air@latest; \
+	        air; \
+	    else \
+	        echo "You can install it with 'go install github.com/air-verse/air@latest'"; \
+	        exit 1; \
+	    fi; \
+	fi
 
-.PHONY: all build run test clean watch docker-run docker-down itest
+test:
+	@go test -v ./internal/api/... ./internal/service/...
+
+race:
+	@go test -race -v ./internal/api/... ./internal/service/...
+
+coverage:
+	@go test -coverprofile=coverage.out ./internal/api/... ./internal/service/...
+	@go tool cover -func=coverage.out
+
+fmt:
+	@go fmt ./...
+
+clean:
+	@rm -f main

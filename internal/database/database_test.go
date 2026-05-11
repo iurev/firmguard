@@ -76,7 +76,11 @@ func TestNew(t *testing.T) {
 func TestHealth(t *testing.T) {
 	srv := New()
 
-	stats := srv.Health()
+	stats, err := srv.Health()
+
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
 
 	if stats["status"] != "up" {
 		t.Fatalf("expected status to be up, got %s", stats["status"])

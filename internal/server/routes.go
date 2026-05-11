@@ -24,9 +24,11 @@ func (s *Server) RegisterRoutes() http.Handler {
 
 	e.GET("/health", s.healthHandler)
 
+	v1 := e.Group("/v1")
+	v1.POST("/firmware-scans", s.scanHdl.CreateScan)
+
 	return e
 }
-
 func (s *Server) HelloWorldHandler(c echo.Context) error {
 	resp := map[string]string{
 		"message": "Hello World",
@@ -36,5 +38,9 @@ func (s *Server) HelloWorldHandler(c echo.Context) error {
 }
 
 func (s *Server) healthHandler(c echo.Context) error {
-	return c.JSON(http.StatusOK, s.db.Health())
+	stats, err := s.db.Health()
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, stats)
+	}
+	return c.JSON(http.StatusOK, stats)
 }
