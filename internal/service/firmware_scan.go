@@ -3,10 +3,12 @@ package service
 import (
 	"context"
 	"errors"
+	"firmguard/internal/database"
 	"firmguard/internal/model"
 	"firmguard/internal/repository"
 	"firmguard/internal/worker"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -19,23 +21,32 @@ type FirmwareScanService interface {
 
 type RiverClient interface {
 	Insert(ctx context.Context, args river.JobArgs, opts *river.InsertOpts) (*rivertype.JobInsertResult, error)
+	InsertTx(ctx context.Context, tx pgx.Tx, args river.JobArgs, opts *river.InsertOpts) (*rivertype.JobInsertResult, error)
 }
 
 type firmwareScanService struct {
+	db    database.Service
 	repo  repository.FirmwareScanRepository
 	river RiverClient
 }
 
-func NewFirmwareScanService(repo repository.FirmwareScanRepository, riverClient RiverClient) FirmwareScanService {
+func NewFirmwareScanService(db database.Service, repo repository.FirmwareScanRepository, riverClient RiverClient) FirmwareScanService {
 	return &firmwareScanService{
+		db:    db,
 		repo:  repo,
 		river: riverClient,
 	}
 }
 
 func (s *firmwareScanService) CreateScan(ctx context.Context, scan *model.FirmwareScan) (*model.FirmwareScan, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
 	scan.Status = "pending"
-	if err := s.repo.Create(ctx, scan); err != nil {
+	if err := s.repo.Create(ctx, tx, scan); err != nil {
 		if repository.IsUniqueViolation(err) {
 			existing, getErr := s.repo.GetByDeviceAndHash(ctx, scan.DeviceID, scan.BinaryHash)
 			if getErr == nil {
@@ -47,8 +58,12 @@ func (s *firmwareScanService) CreateScan(ctx context.Context, scan *model.Firmwa
 	}
 
 	// Enqueue background analysis
-	_, err := s.river.Insert(ctx, worker.FirmwareAnalysisArgs{ID: scan.ID}, nil)
+	_, err = s.river.InsertTx(ctx, tx, worker.FirmwareAnalysisArgs{ID: scan.ID}, nil)
 	if err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 

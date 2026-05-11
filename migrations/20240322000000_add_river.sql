@@ -71,6 +71,7 @@ CREATE INDEX river_job_args_index ON river_job USING GIN(args);
 
 CREATE INDEX river_job_metadata_index ON river_job USING GIN(metadata);
 
+-- +goose StatementBegin
 CREATE OR REPLACE FUNCTION river_job_notify()
   RETURNS TRIGGER
   AS $$
@@ -88,6 +89,7 @@ BEGIN
 END;
 $$
 LANGUAGE plpgsql;
+-- +goose StatementEnd
 
 CREATE TRIGGER river_notify
   AFTER INSERT ON river_job
@@ -164,6 +166,7 @@ ALTER TABLE river_leader
 -- Rebuild the migration table so it's based on `(line, version)`.
 --
 
+-- +goose StatementBegin
 DO
 $body$
 BEGIN
@@ -192,7 +195,8 @@ BEGIN
     END IF;
 END;
 $body$
-LANGUAGE 'plpgsql'; 
+LANGUAGE 'plpgsql';
+-- +goose StatementEnd 
 
 --
 -- Add `river_job.unique_key` and bring up an index on it.
@@ -373,6 +377,7 @@ ALTER TABLE river_job ADD CONSTRAINT finalized_or_finalized_at_null CHECK (
   (state IN ('cancelled', 'completed', 'discarded') AND finalized_at IS NOT NULL) OR finalized_at IS NULL
 );
 
+-- +goose StatementBegin
 CREATE OR REPLACE FUNCTION river_job_notify()
   RETURNS TRIGGER
   AS $$
@@ -390,6 +395,7 @@ BEGIN
 END;
 $$
 LANGUAGE plpgsql;
+-- +goose StatementEnd
 
 CREATE TRIGGER river_notify
   AFTER INSERT ON river_job

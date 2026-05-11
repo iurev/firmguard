@@ -28,8 +28,8 @@ func NewServer(riverClient *river.Client[riverpgxv5.Driver]) *http.Server {
 	port, _ := strconv.Atoi(os.Getenv("PORT"))
 	db := database.New()
 
-	scanRepo := repository.NewFirmwareScanRepository(db.GetDB())
-	scanSvc := service.NewFirmwareScanService(scanRepo, riverClient)
+	scanRepo := repository.NewFirmwareScanRepository(db.GetPool())
+	scanSvc := service.NewFirmwareScanService(db, scanRepo, riverClient)
 	scanHdl := api.NewFirmwareScanHandler(scanSvc)
 
 	vulnRepo := repository.NewVulnerabilityRepository(db.GetDB())

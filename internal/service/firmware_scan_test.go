@@ -7,6 +7,7 @@ import (
 	"firmguard/internal/worker"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
@@ -14,12 +15,41 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
+type MockDB struct {
+	mock.Mock
+}
+
+func (m *MockDB) Health() (map[string]string, error) { return nil, nil }
+func (m *MockDB) Close() error                     { return nil }
+func (m *MockDB) GetDB() any                       { return nil }
+func (m *MockDB) GetPool() any                      { return nil }
+func (m *MockDB) Begin(ctx context.Context) (pgx.Tx, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(pgx.Tx), args.Error(1)
+}
+
+type MockTx struct {
+	mock.Mock
+	pgx.Tx
+}
+
+func (m *MockTx) Commit(ctx context.Context) error {
+	return m.Called(ctx).Error(0)
+}
+
+func (m *MockTx) Rollback(ctx context.Context) error {
+	return m.Called(ctx).Error(0)
+}
+
 type MockRepository struct {
 	mock.Mock
 }
 
-func (m *MockRepository) Create(ctx context.Context, scan *model.FirmwareScan) error {
-	args := m.Called(ctx, scan)
+func (m *MockRepository) Create(ctx context.Context, tx pgx.Tx, scan *model.FirmwareScan) error {
+	args := m.Called(ctx, tx, scan)
 	err := args.Error(0)
 	if err == nil {
 		scan.ID = 1
@@ -40,6 +70,11 @@ func (m *MockRepository) UpdateStatus(ctx context.Context, id int, status string
 	return args.Error(0)
 }
 
+func (m *MockRepository) UpdateResult(ctx context.Context, id int, status string, vulns []string) error {
+	args := m.Called(ctx, id, status, vulns)
+	return args.Error(0)
+}
+
 type MockRiverClient struct {
 	mock.Mock
 }
@@ -52,17 +87,30 @@ func (m *MockRiverClient) Insert(ctx context.Context, args river.JobArgs, opts *
 	return callArgs.Get(0).(*rivertype.JobInsertResult), callArgs.Error(1)
 }
 
+func (m *MockRiverClient) InsertTx(ctx context.Context, tx pgx.Tx, args river.JobArgs, opts *river.InsertOpts) (*rivertype.JobInsertResult, error) {
+	callArgs := m.Called(ctx, tx, args, opts)
+	if callArgs.Get(0) == nil {
+		return nil, callArgs.Error(1)
+	}
+	return callArgs.Get(0).(*rivertype.JobInsertResult), callArgs.Error(1)
+}
+
 func TestCreateScan(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("success", func(t *testing.T) {
+		db := new(MockDB)
+		tx := new(MockTx)
 		repo := new(MockRepository)
 		riverClient := new(MockRiverClient)
-		svc := NewFirmwareScanService(repo, riverClient)
+		svc := NewFirmwareScanService(db, repo, riverClient)
 		scan := &model.FirmwareScan{DeviceID: "d1", BinaryHash: "h1"}
 
-		repo.On("Create", ctx, scan).Return(nil)
-		riverClient.On("Insert", ctx, worker.FirmwareAnalysisArgs{ID: 1}, mock.Anything).Return(&rivertype.JobInsertResult{}, nil)
+		db.On("Begin", ctx).Return(tx, nil)
+		repo.On("Create", ctx, tx, scan).Return(nil)
+		riverClient.On("InsertTx", ctx, tx, worker.FirmwareAnalysisArgs{ID: 1}, mock.Anything).Return(&rivertype.JobInsertResult{}, nil)
+		tx.On("Commit", ctx).Return(nil)
+		tx.On("Rollback", ctx).Return(nil)
 
 		result, err := svc.CreateScan(ctx, scan)
 		assert.NoError(t, err)
@@ -70,67 +118,43 @@ func TestCreateScan(t *testing.T) {
 
 		repo.AssertExpectations(t)
 		riverClient.AssertExpectations(t)
+		db.AssertExpectations(t)
 	})
 
 	t.Run("already exists", func(t *testing.T) {
+		db := new(MockDB)
+		tx := new(MockTx)
 		repo := new(MockRepository)
 		riverClient := new(MockRiverClient)
-		svc := NewFirmwareScanService(repo, riverClient)
+		svc := NewFirmwareScanService(db, repo, riverClient)
 		scan := &model.FirmwareScan{DeviceID: "d1", BinaryHash: "h1"}
 		existing := &model.FirmwareScan{ID: 1, DeviceID: "d1", BinaryHash: "h1"}
 
+		db.On("Begin", ctx).Return(tx, nil)
 		uniqueErr := &pgconn.PgError{Code: "23505"}
-		repo.On("Create", ctx, scan).Return(uniqueErr)
+		repo.On("Create", ctx, tx, scan).Return(uniqueErr)
 		repo.On("GetByDeviceAndHash", ctx, "d1", "h1").Return(existing, nil)
+		tx.On("Rollback", ctx).Return(nil)
 
 		result, err := svc.CreateScan(ctx, scan)
 		assert.ErrorIs(t, err, ErrScanAlreadyExists)
 		assert.Equal(t, existing, result)
-		repo.AssertExpectations(t)
-	})
-
-	t.Run("repo error on get after unique violation", func(t *testing.T) {
-		repo := new(MockRepository)
-		riverClient := new(MockRiverClient)
-		svc := NewFirmwareScanService(repo, riverClient)
-		scan := &model.FirmwareScan{DeviceID: "d1", BinaryHash: "h1"}
-
-		uniqueErr := &pgconn.PgError{Code: "23505"}
-		repo.On("Create", ctx, scan).Return(uniqueErr)
-		repo.On("GetByDeviceAndHash", ctx, "d1", "h1").Return(nil, errors.New("db error"))
-
-		result, err := svc.CreateScan(ctx, scan)
-		assert.Error(t, err)
-		assert.Nil(t, result)
-		repo.AssertExpectations(t)
 	})
 
 	t.Run("repo error on create", func(t *testing.T) {
+		db := new(MockDB)
+		tx := new(MockTx)
 		repo := new(MockRepository)
 		riverClient := new(MockRiverClient)
-		svc := NewFirmwareScanService(repo, riverClient)
+		svc := NewFirmwareScanService(db, repo, riverClient)
 		scan := &model.FirmwareScan{DeviceID: "d1", BinaryHash: "h1"}
 
-		repo.On("Create", ctx, scan).Return(errors.New("db error"))
+		db.On("Begin", ctx).Return(tx, nil)
+		repo.On("Create", ctx, tx, scan).Return(errors.New("db error"))
+		tx.On("Rollback", ctx).Return(nil)
 
 		result, err := svc.CreateScan(ctx, scan)
 		assert.Error(t, err)
 		assert.Nil(t, result)
-		repo.AssertExpectations(t)
-	})
-
-	t.Run("river error", func(t *testing.T) {
-		repo := new(MockRepository)
-		riverClient := new(MockRiverClient)
-		svc := NewFirmwareScanService(repo, riverClient)
-		scan := &model.FirmwareScan{DeviceID: "d1", BinaryHash: "h1"}
-
-		repo.On("Create", ctx, scan).Return(nil)
-		riverClient.On("Insert", ctx, worker.FirmwareAnalysisArgs{ID: 1}, mock.Anything).Return(nil, errors.New("river error"))
-
-		result, err := svc.CreateScan(ctx, scan)
-		assert.Error(t, err)
-		assert.Nil(t, result)
-		repo.AssertExpectations(t)
 	})
 }

@@ -8,7 +8,9 @@ import (
 	"strconv"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/joho/godotenv/autoload"
 )
@@ -25,10 +27,17 @@ type Service interface {
 
 	// GetDB returns the sqlx.DB instance.
 	GetDB() *sqlx.DB
+
+	// GetPool returns the pgxpool.Pool instance.
+	GetPool() *pgxpool.Pool
+
+	// Begin starts a transaction on the pgxpool.
+	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
 type service struct {
-	db *sqlx.DB
+	db   *sqlx.DB
+	pool *pgxpool.Pool
 }
 
 var (
@@ -47,18 +56,36 @@ func New() Service {
 		return dbInstance
 	}
 	connStr := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable&search_path=%s", username, password, host, port, database, schema)
-	db, err := sqlx.Open("pgx", connStr)
+	
+	poolConfig, err := pgxpool.ParseConfig(connStr)
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	pool, err := pgxpool.NewWithConfig(context.Background(), poolConfig)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	db := sqlx.NewDb(stdlib.OpenDBFromPool(pool), "pgx")
+
 	dbInstance = &service{
-		db: db,
+		db:   db,
+		pool: pool,
 	}
 	return dbInstance
 }
 
 func (s *service) GetDB() *sqlx.DB {
 	return s.db
+}
+
+func (s *service) GetPool() *pgxpool.Pool {
+	return s.pool
+}
+
+func (s *service) Begin(ctx context.Context) (pgx.Tx, error) {
+	return s.pool.Begin(ctx)
 }
 
 // Health checks the health of the database connection by pinging the database.

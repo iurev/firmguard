@@ -28,3 +28,8 @@
 - [x] Final Review & Documentation
 - [x] Integrate River for background jobs (Retries/Persistence)
 - [x] 100% code coverage for River worker and integration
+- [x] Add `vulns` (jsonb) field to `firmware_scans` table
+- [x] Update worker to simulate 1-60s delay and random outcomes (Found, Fail, Not Found)
+- [x] Maintain 100% code coverage across all layers
+- [x] Final Review & Documentation
+

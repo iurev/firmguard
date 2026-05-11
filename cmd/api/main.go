@@ -55,25 +55,15 @@ func gracefulShutdown(apiServer *http.Server, riverClient *river.Client[riverpgx
 func main() {
 	ctx := context.Background()
 
-	dbURL := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
-		os.Getenv("BLUEPRINT_DB_USERNAME"),
-		os.Getenv("BLUEPRINT_DB_PASSWORD"),
-		os.Getenv("BLUEPRINT_DB_HOST"),
-		os.Getenv("BLUEPRINT_DB_PORT"),
-		os.Getenv("BLUEPRINT_DB_DATABASE"),
-	)
-
-	dbPool, err := pgxpool.New(ctx, dbURL)
-	if err != nil {
-		log.Fatalf("failed to connect to database: %v", err)
-	}
-	defer dbPool.Close()
+	// Initialize Database
+	db := database.New()
+	dbPool := db.GetPool()
 
 	// Initialize River
 	workers := river.NewWorkers()
-	db := database.New()
-	scanRepo := repository.NewFirmwareScanRepository(db.GetDB())
-	river.AddWorker(workers, worker.NewFirmwareAnalysisWorker(scanRepo))
+	scanRepo := repository.NewFirmwareScanRepository(db.GetPool())
+	vulnRepo := repository.NewVulnerabilityRepository(db.GetDB())
+	river.AddWorker(workers, worker.NewFirmwareAnalysisWorker(scanRepo, vulnRepo))
 
 	riverClient, err := river.NewClient(riverpgxv5.New(dbPool), &river.Config{
 		Queues: map[string]river.QueueConfig{
