@@ -2,9 +2,23 @@ package repository
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"firmguard/internal/model"
+
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jmoiron/sqlx"
 )
+
+func IsUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "23505"
+	}
+	return false
+}
+
+var ErrDuplicate = errors.New("duplicate entry")
 
 type FirmwareScanRepository interface {
 	Create(ctx context.Context, scan *model.FirmwareScan) error
@@ -44,6 +58,16 @@ func (r *firmwareScanRepository) GetByDeviceAndHash(ctx context.Context, deviceI
 }
 
 func (r *firmwareScanRepository) UpdateStatus(ctx context.Context, id int, status string) error {
-	_, err := r.db.ExecContext(ctx, "UPDATE firmware_scans SET status = $1, updated_at = NOW() WHERE id = $2", status, id)
-	return err
+	res, err := r.db.ExecContext(ctx, "UPDATE firmware_scans SET status = $1, updated_at = NOW() WHERE id = $2", status, id)
+	if err != nil {
+		return err
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }

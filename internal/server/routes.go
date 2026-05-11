@@ -27,6 +27,10 @@ func (s *Server) RegisterRoutes() http.Handler {
 	v1 := e.Group("/v1")
 	v1.POST("/firmware-scans", s.scanHdl.CreateScan)
 
+	findings := v1.Group("/findings")
+	findings.PATCH("/vulns", s.vulnHdl.RegisterVulnerabilities)
+	findings.GET("/vulns", s.vulnHdl.GetVulnerabilities)
+
 	return e
 }
 func (s *Server) HelloWorldHandler(c echo.Context) error {

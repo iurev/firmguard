@@ -19,20 +19,27 @@ type Server struct {
 
 	db      database.Service
 	scanHdl *api.FirmwareScanHandler
+	vulnHdl *api.VulnerabilityHandler
 }
 
 func NewServer() *http.Server {
 	port, _ := strconv.Atoi(os.Getenv("PORT"))
 	db := database.New()
+	
 	scanRepo := repository.NewFirmwareScanRepository(db.GetDB())
 	scanSvc := service.NewFirmwareScanService(scanRepo)
 	scanHdl := api.NewFirmwareScanHandler(scanSvc)
+
+	vulnRepo := repository.NewVulnerabilityRepository(db.GetDB())
+	vulnSvc := service.NewVulnerabilityService(vulnRepo)
+	vulnHdl := api.NewVulnerabilityHandler(vulnSvc)
 
 	NewServer := &Server{
 		port: port,
 
 		db:      db,
 		scanHdl: scanHdl,
+		vulnHdl: vulnHdl,
 	}
 
 	// Declare Server config

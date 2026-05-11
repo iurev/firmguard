@@ -2,16 +2,17 @@ package service
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"firmguard/internal/model"
 	"firmguard/internal/repository"
+	"log"
 	"math/rand"
 	"os"
 	"time"
 )
 
 var ErrScanAlreadyExists = errors.New("scan already exists")
+
 var scanWorkerDelay = 2 * time.Second
 var randIntn = rand.Intn
 
@@ -28,16 +29,15 @@ func NewFirmwareScanService(repo repository.FirmwareScanRepository) FirmwareScan
 }
 
 func (s *firmwareScanService) CreateScan(ctx context.Context, scan *model.FirmwareScan) (*model.FirmwareScan, error) {
-	existing, err := s.repo.GetByDeviceAndHash(ctx, scan.DeviceID, scan.BinaryHash)
-	if err == nil && existing != nil {
-		return existing, ErrScanAlreadyExists
-	}
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return nil, err
-	}
-
 	scan.Status = "pending"
 	if err := s.repo.Create(ctx, scan); err != nil {
+		if repository.IsUniqueViolation(err) {
+			existing, getErr := s.repo.GetByDeviceAndHash(ctx, scan.DeviceID, scan.BinaryHash)
+			if getErr == nil {
+				return existing, ErrScanAlreadyExists
+			}
+			return nil, err
+		}
 		return nil, err
 	}
 
@@ -50,7 +50,9 @@ func (s *firmwareScanService) CreateScan(ctx context.Context, scan *model.Firmwa
 				status = "failed"
 			}
 		}
-		_ = s.repo.UpdateStatus(context.Background(), id, status)
+		if err := s.repo.UpdateStatus(context.Background(), id, status); err != nil {
+			log.Printf("failed to update scan status for id %d: %v", id, err)
+		}
 	}(scan.ID)
 
 	return scan, nil
