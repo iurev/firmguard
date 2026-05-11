@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"firmguard/internal/model"
-	"os"
+	"firmguard/internal/worker"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -39,33 +40,42 @@ func (m *MockRepository) UpdateStatus(ctx context.Context, id int, status string
 	return args.Error(0)
 }
 
+type MockRiverClient struct {
+	mock.Mock
+}
+
+func (m *MockRiverClient) Insert(ctx context.Context, args river.JobArgs, opts *river.InsertOpts) (*rivertype.JobInsertResult, error) {
+	callArgs := m.Called(ctx, args, opts)
+	if callArgs.Get(0) == nil {
+		return nil, callArgs.Error(1)
+	}
+	return callArgs.Get(0).(*rivertype.JobInsertResult), callArgs.Error(1)
+}
+
 func TestCreateScan(t *testing.T) {
 	ctx := context.Background()
-	// Speed up background worker for tests
-	originalDelay := scanWorkerDelay
-	scanWorkerDelay = 0
-	defer func() { scanWorkerDelay = originalDelay }()
 
 	t.Run("success", func(t *testing.T) {
 		repo := new(MockRepository)
-		svc := NewFirmwareScanService(repo)
+		riverClient := new(MockRiverClient)
+		svc := NewFirmwareScanService(repo, riverClient)
 		scan := &model.FirmwareScan{DeviceID: "d1", BinaryHash: "h1"}
 
 		repo.On("Create", ctx, scan).Return(nil)
-		repo.On("UpdateStatus", mock.Anything, 1, "completed").Return(nil)
+		riverClient.On("Insert", ctx, worker.FirmwareAnalysisArgs{ID: 1}, mock.Anything).Return(&rivertype.JobInsertResult{}, nil)
 
 		result, err := svc.CreateScan(ctx, scan)
 		assert.NoError(t, err)
 		assert.Equal(t, "pending", result.Status)
-		
-		// Wait for goroutine
-		time.Sleep(10 * time.Millisecond)
+
 		repo.AssertExpectations(t)
+		riverClient.AssertExpectations(t)
 	})
 
 	t.Run("already exists", func(t *testing.T) {
 		repo := new(MockRepository)
-		svc := NewFirmwareScanService(repo)
+		riverClient := new(MockRiverClient)
+		svc := NewFirmwareScanService(repo, riverClient)
 		scan := &model.FirmwareScan{DeviceID: "d1", BinaryHash: "h1"}
 		existing := &model.FirmwareScan{ID: 1, DeviceID: "d1", BinaryHash: "h1"}
 
@@ -81,7 +91,8 @@ func TestCreateScan(t *testing.T) {
 
 	t.Run("repo error on get after unique violation", func(t *testing.T) {
 		repo := new(MockRepository)
-		svc := NewFirmwareScanService(repo)
+		riverClient := new(MockRiverClient)
+		svc := NewFirmwareScanService(repo, riverClient)
 		scan := &model.FirmwareScan{DeviceID: "d1", BinaryHash: "h1"}
 
 		uniqueErr := &pgconn.PgError{Code: "23505"}
@@ -96,7 +107,8 @@ func TestCreateScan(t *testing.T) {
 
 	t.Run("repo error on create", func(t *testing.T) {
 		repo := new(MockRepository)
-		svc := NewFirmwareScanService(repo)
+		riverClient := new(MockRiverClient)
+		svc := NewFirmwareScanService(repo, riverClient)
 		scan := &model.FirmwareScan{DeviceID: "d1", BinaryHash: "h1"}
 
 		repo.On("Create", ctx, scan).Return(errors.New("db error"))
@@ -107,47 +119,18 @@ func TestCreateScan(t *testing.T) {
 		repo.AssertExpectations(t)
 	})
 
-	t.Run("simulate failure branch - failed", func(t *testing.T) {
-		os.Setenv("SIMULATE_FAILURE", "true")
-		defer os.Unsetenv("SIMULATE_FAILURE")
-		
-		originalRand := randIntn
-		randIntn = func(n int) int { return 40 } // < 50
-		defer func() { randIntn = originalRand }()
-
+	t.Run("river error", func(t *testing.T) {
 		repo := new(MockRepository)
-		svc := NewFirmwareScanService(repo)
+		riverClient := new(MockRiverClient)
+		svc := NewFirmwareScanService(repo, riverClient)
 		scan := &model.FirmwareScan{DeviceID: "d1", BinaryHash: "h1"}
 
 		repo.On("Create", ctx, scan).Return(nil)
-		repo.On("UpdateStatus", mock.Anything, 1, "failed").Return(nil)
+		riverClient.On("Insert", ctx, worker.FirmwareAnalysisArgs{ID: 1}, mock.Anything).Return(nil, errors.New("river error"))
 
-		_, err := svc.CreateScan(ctx, scan)
-		assert.NoError(t, err)
-		
-		time.Sleep(10 * time.Millisecond)
-		repo.AssertExpectations(t)
-	})
-
-	t.Run("simulate failure branch - completed", func(t *testing.T) {
-		os.Setenv("SIMULATE_FAILURE", "true")
-		defer os.Unsetenv("SIMULATE_FAILURE")
-		
-		originalRand := randIntn
-		randIntn = func(n int) int { return 60 } // >= 50
-		defer func() { randIntn = originalRand }()
-
-		repo := new(MockRepository)
-		svc := NewFirmwareScanService(repo)
-		scan := &model.FirmwareScan{DeviceID: "d1", BinaryHash: "h1"}
-
-		repo.On("Create", ctx, scan).Return(nil)
-		repo.On("UpdateStatus", mock.Anything, 1, "completed").Return(nil)
-
-		_, err := svc.CreateScan(ctx, scan)
-		assert.NoError(t, err)
-		
-		time.Sleep(10 * time.Millisecond)
+		result, err := svc.CreateScan(ctx, scan)
+		assert.Error(t, err)
+		assert.Nil(t, result)
 		repo.AssertExpectations(t)
 	})
 }

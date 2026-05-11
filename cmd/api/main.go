@@ -5,14 +5,22 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"firmguard/internal/database"
+	"firmguard/internal/repository"
 	"firmguard/internal/server"
+	"firmguard/internal/worker"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 )
 
-func gracefulShutdown(apiServer *http.Server, done chan bool) {
+func gracefulShutdown(apiServer *http.Server, riverClient *river.Client[riverpgxv5.Driver], done chan bool) {
 	// Create context that listens for the interrupt signal from the OS.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -27,6 +35,13 @@ func gracefulShutdown(apiServer *http.Server, done chan bool) {
 	// the request it is currently handling
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+
+	if riverClient != nil {
+		if err := riverClient.Stop(ctx); err != nil {
+			log.Printf("River client stop error: %v", err)
+		}
+	}
+
 	if err := apiServer.Shutdown(ctx); err != nil {
 		log.Printf("Server forced to shutdown with error: %v", err)
 	}
@@ -38,16 +53,51 @@ func gracefulShutdown(apiServer *http.Server, done chan bool) {
 }
 
 func main() {
+	ctx := context.Background()
 
-	server := server.NewServer()
+	dbURL := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
+		os.Getenv("BLUEPRINT_DB_USERNAME"),
+		os.Getenv("BLUEPRINT_DB_PASSWORD"),
+		os.Getenv("BLUEPRINT_DB_HOST"),
+		os.Getenv("BLUEPRINT_DB_PORT"),
+		os.Getenv("BLUEPRINT_DB_DATABASE"),
+	)
+
+	dbPool, err := pgxpool.New(ctx, dbURL)
+	if err != nil {
+		log.Fatalf("failed to connect to database: %v", err)
+	}
+	defer dbPool.Close()
+
+	// Initialize River
+	workers := river.NewWorkers()
+	db := database.New()
+	scanRepo := repository.NewFirmwareScanRepository(db.GetDB())
+	river.AddWorker(workers, worker.NewFirmwareAnalysisWorker(scanRepo))
+
+	riverClient, err := river.NewClient(riverpgxv5.New(dbPool), &river.Config{
+		Queues: map[string]river.QueueConfig{
+			river.QueueDefault: {MaxWorkers: 10},
+		},
+		Workers: workers,
+	})
+	if err != nil {
+		log.Fatalf("failed to create river client: %v", err)
+	}
+
+	if err := riverClient.Start(ctx); err != nil {
+		log.Fatalf("failed to start river client: %v", err)
+	}
+
+	server := server.NewServer(riverClient)
 
 	// Create a done channel to signal when the shutdown is complete
 	done := make(chan bool, 1)
 
 	// Run graceful shutdown in a separate goroutine
-	go gracefulShutdown(server, done)
+	go gracefulShutdown(server, riverClient, done)
 
-	err := server.ListenAndServe()
+	err = server.ListenAndServe()
 	if err != nil && err != http.ErrServerClosed {
 		panic(fmt.Sprintf("http server error: %s", err))
 	}

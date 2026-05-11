@@ -12,6 +12,8 @@ import (
 	"time"
 
 	_ "github.com/joho/godotenv/autoload"
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 )
 
 type Server struct {
@@ -22,12 +24,12 @@ type Server struct {
 	vulnHdl *api.VulnerabilityHandler
 }
 
-func NewServer() *http.Server {
+func NewServer(riverClient *river.Client[riverpgxv5.Driver]) *http.Server {
 	port, _ := strconv.Atoi(os.Getenv("PORT"))
 	db := database.New()
-	
+
 	scanRepo := repository.NewFirmwareScanRepository(db.GetDB())
-	scanSvc := service.NewFirmwareScanService(scanRepo)
+	scanSvc := service.NewFirmwareScanService(scanRepo, riverClient)
 	scanHdl := api.NewFirmwareScanHandler(scanSvc)
 
 	vulnRepo := repository.NewVulnerabilityRepository(db.GetDB())

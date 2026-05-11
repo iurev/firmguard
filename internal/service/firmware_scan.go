@@ -5,27 +5,32 @@ import (
 	"errors"
 	"firmguard/internal/model"
 	"firmguard/internal/repository"
-	"log"
-	"math/rand"
-	"os"
-	"time"
+	"firmguard/internal/worker"
+
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/rivertype"
 )
 
 var ErrScanAlreadyExists = errors.New("scan already exists")
-
-var scanWorkerDelay = 2 * time.Second
-var randIntn = rand.Intn
 
 type FirmwareScanService interface {
 	CreateScan(ctx context.Context, scan *model.FirmwareScan) (*model.FirmwareScan, error)
 }
 
-type firmwareScanService struct {
-	repo repository.FirmwareScanRepository
+type RiverClient interface {
+	Insert(ctx context.Context, args river.JobArgs, opts *river.InsertOpts) (*rivertype.JobInsertResult, error)
 }
 
-func NewFirmwareScanService(repo repository.FirmwareScanRepository) FirmwareScanService {
-	return &firmwareScanService{repo: repo}
+type firmwareScanService struct {
+	repo  repository.FirmwareScanRepository
+	river RiverClient
+}
+
+func NewFirmwareScanService(repo repository.FirmwareScanRepository, riverClient RiverClient) FirmwareScanService {
+	return &firmwareScanService{
+		repo:  repo,
+		river: riverClient,
+	}
 }
 
 func (s *firmwareScanService) CreateScan(ctx context.Context, scan *model.FirmwareScan) (*model.FirmwareScan, error) {
@@ -41,19 +46,11 @@ func (s *firmwareScanService) CreateScan(ctx context.Context, scan *model.Firmwa
 		return nil, err
 	}
 
-	// Trigger background worker
-	go func(id int) {
-		time.Sleep(scanWorkerDelay)
-		status := "completed"
-		if os.Getenv("SIMULATE_FAILURE") == "true" {
-			if randIntn(100) < 50 {
-				status = "failed"
-			}
-		}
-		if err := s.repo.UpdateStatus(context.Background(), id, status); err != nil {
-			log.Printf("failed to update scan status for id %d: %v", id, err)
-		}
-	}(scan.ID)
+	// Enqueue background analysis
+	_, err := s.river.Insert(ctx, worker.FirmwareAnalysisArgs{ID: scan.ID}, nil)
+	if err != nil {
+		return nil, err
+	}
 
 	return scan, nil
 }

@@ -26,5 +26,5 @@
 - [x] Achieve 100% code coverage for implemented logic
 - [x] Implement CVE Registry API (PATCH/GET)
 - [x] Final Review & Documentation
-- [ ] Integrate River for background jobs (Retries/Persistence)
-- [ ] 100% code coverage for River worker and integration
+- [x] Integrate River for background jobs (Retries/Persistence)
+- [x] 100% code coverage for River worker and integration
