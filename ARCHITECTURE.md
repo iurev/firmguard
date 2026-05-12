@@ -2,7 +2,7 @@
 
 ## System Diagram
 
-The system has three runtime components (plus the device/client that talks to it):
+Three runtime components, plus the device that calls the API:
 
 ```mermaid
 flowchart LR
@@ -17,22 +17,22 @@ flowchart LR
     Worker -->|"UpdateResult"| DB
 ```
 
-- **Go API** — Echo-based HTTP server. Accepts scan registrations and CVE writes/reads, enqueues background jobs transactionally.
-- **Go Background Worker (River)** — long-running worker process that picks up `firmware_analysis` jobs from Postgres via `SKIP LOCKED`, simulates analysis, and writes results back. Currently runs in the same binary as the API; in production it would be a separate deployment.
-- **Postgres** — single source of truth. Holds the domain tables (`firmware_scans`, `vulnerabilities`) and the queue table (`river_jobs`). Uniqueness constraints + `ON CONFLICT` give us idempotency and cross-replica safety with no extra infrastructure.
+- **Go API**: Echo HTTP server. Takes scan requests and CVE writes/reads. Enqueues jobs in the same DB transaction.
+- **Go Background Worker (River)**: picks up `firmware_analysis` jobs from Postgres with `SKIP LOCKED`. Simulates analysis. Writes the result back. Runs in the same binary as the API today. In production it would be a separate Kubernetes deployment.
+- **Postgres**: the single source of truth. Holds `firmware_scans`, `vulnerabilities`, and `river_jobs`. Unique constraints plus `ON CONFLICT` give idempotency and safety across replicas. No extra infrastructure needed.
 
 ---
 
-## Flow: Firmware Scan (submit → background analysis)
+## Flow: Firmware Scan (submit then background analysis)
 
-End-to-end lifecycle of a single firmware scan from HTTP request through River worker completion, with every branch in the code shown as a decision node.
+How one scan goes from HTTP request to a final status.
 
 ```mermaid
 flowchart TD
     Device -->|"POST /v1/firmware-scans"| API
     API --> Upsert[("firmware_scans<br/>upsert by device_id + binary_hash")]
     Upsert --> IsNew{"new row?"}
-    IsNew -- "no" --> Resp200["200 OK — duplicate, no extra work"]
+    IsNew -- "no" --> Resp200["200 OK: duplicate, no extra work"]
     IsNew -- "yes" --> Enqueue["Enqueue analysis job<br/>same tx as the insert"]
     Enqueue --> Resp202["202 Accepted"]
 
@@ -45,38 +45,38 @@ flowchart TD
     Outcome -- "clean" --> Done2["status = completed"]
 ```
 
-**Key invariants this flow guarantees:**
-- The River job and the scan row commit **atomically** — if `tx.Commit` fails, no job is enqueued and no row exists.
-- Workers cannot pick up a job before its scan row is visible (both live in the same committed snapshot).
-- A duplicate submission is `O(1)` work: one upsert that touches `updated_at` and returns the existing row. No second job is ever enqueued.
-- After `MaxAttempts` failed attempts the scan row reaches a **terminal** state (`failed`), so `GET /v1/firmware-scans/:id` always converges to one of `completed` / `failed` — never stuck in `pending` indefinitely.
+**Why this flow is safe:**
+- The scan row and the River job commit together. If `tx.Commit` fails, neither exists.
+- A worker cannot pick up a job before the scan row is visible. They share the same committed snapshot.
+- A duplicate POST is O(1) work: one upsert, no new job.
+- After `MaxAttempts` failed tries, the scan row becomes `failed`. So `GET /v1/firmware-scans/:id` always ends in `completed` or `failed`. It never stays `pending` forever.
 
 ---
 
 ## Flow: CVE Vulnerability Registry (PATCH + GET)
 
-How the distributed CVE registry handles writes, concurrent writes from multiple replicas, and reads.
+How the registry handles writes, concurrent writes from many replicas, and reads.
 
 ```mermaid
 flowchart TD
-    subgraph PATCH ["PATCH /v1/findings/vulns — append"]
+    subgraph PATCH ["PATCH /v1/findings/vulns: append"]
         ClientP[Client] -->|"vulns array"| APIP[API]
         APIP --> UpsertCVE[("INSERT ... ON CONFLICT cve_id DO NOTHING<br/>dedup happens here")]
         UpsertCVE --> R204["204 No Content"]
     end
 
-    subgraph GET ["GET /v1/findings/vulns — read"]
+    subgraph GET ["GET /v1/findings/vulns: read"]
         ClientG[Client] --> APIG[API]
         APIG --> ListCVE[("SELECT cve_id FROM vulnerabilities")]
-        ListCVE --> R200["200 OK — unique CVE list"]
+        ListCVE --> R200["200 OK: unique CVE list"]
     end
 ```
 
-**Where the deduplication conditions actually hit:**
-- **In-batch duplicates within a single request** (e.g. `{vulns: ['CVE-1','CVE-1']}`): handled by `ON CONFLICT (cve_id) DO NOTHING`. The first row inserts, the second hits the conflict and is silently dropped. No in-memory dedup is needed because the DB resolves it in a single round-trip.
-- **Cross-request duplicates** (id already exists from an earlier PATCH): same mechanism — `ON CONFLICT DO NOTHING`.
-- **Cross-replica race** (two replicas PATCH the same id at the same moment): Postgres serializes the inserts at the unique-index level. Exactly one wins, the other gets `DO NOTHING`. No application-level locking, no Redis/Zookeeper, no distributed consensus required — the DB is the synchronization primitive.
-- **Empty registry on read**: `repository.List` may return `nil`; service coerces to `[]string{}` so the JSON response is always `{"vulns": []}` and never `{"vulns": null}`.
+**Where deduplication actually happens:**
+- **Duplicates inside one request** (for example `{vulns: ['CVE-1','CVE-1']}`): `ON CONFLICT (cve_id) DO NOTHING` keeps the first row and drops the second. No in-memory dedup needed.
+- **Duplicates across requests** (id already exists from an earlier PATCH): same mechanism.
+- **Race across replicas** (two replicas PATCH the same id at the same moment): Postgres serializes the inserts on the unique index. One wins, the other gets `DO NOTHING`. No app locks. No Redis or Zookeeper. The DB is the sync point.
+- **Empty registry on read**: `repository.List` can return `nil`. The service converts it to `[]string{}`. The JSON is always `{"vulns": []}`, never `null`.
 
 ---
 
@@ -85,101 +85,101 @@ flowchart TD
 ### API: `POST /v1/firmware-scans`
 
 - [DONE] Accept scan registrations with `device_id`, `firmware_version`, `binary_hash`, `metadata`
-  - **How:** `api/firmware_scan.go` binds the request body to `model.FirmwareScan` and validates required fields.
+  - **How:** `api/firmware_scan.go` binds the body to `model.FirmwareScan` and checks required fields.
 
 - [DONE] Support large `metadata` JSON payloads
-  - **How:** `metadata` is stored as `json.RawMessage` (passed through as raw bytes, never decoded), mapped to a Postgres `jsonb` column.
+  - **How:** `metadata` is `json.RawMessage`. It passes through as raw bytes and maps to a Postgres `jsonb` column.
 
-- [DONE] Devices may retry — duplicate requests must not cause redundant processing
-  - **How:** `repository/firmware_scan.go` uses `INSERT ... ON CONFLICT (device_id, binary_hash) DO UPDATE SET updated_at = NOW()`. The Postgres `xmax` trick (`xmax = 0 AS is_inserted`) detects whether the row was freshly inserted or was a conflict. The River job is only enqueued in `service/firmware_scan.go` when `IsInserted = true`.
+- [DONE] Devices may retry. Duplicate requests must not cause redundant work
+  - **How:** `repository/firmware_scan.go` uses `INSERT ... ON CONFLICT (device_id, binary_hash) DO UPDATE SET updated_at = NOW()`. The Postgres `xmax` trick (`xmax = 0 AS is_inserted`) tells us if the row is new. `service/firmware_scan.go` only enqueues the River job when `IsInserted = true`.
 
-- [DONE] Register a scan and return it
-  - **How:** Handler returns `202 Accepted` with the full scan record (including assigned `id` and `status = "pending"`) for new scans, or `200 OK` with the existing record for duplicate submissions. The `isNew` flag is plumbed from `service.CreateScan` (return signature: `(*scan, bool, error)`) so the handler can pick the right status code without a second DB roundtrip.
+- [DONE] Register and return the scan
+  - **How:** Returns `202 Accepted` with the new scan record. Returns `200 OK` with the existing record for duplicate submissions. The `isNew` flag comes from `service.CreateScan` (signature `(*scan, bool, error)`). So the handler picks the status code without a second DB call.
 
 ---
 
-### API: `GET /v1/firmware-scans/:id` (status observability)
+### API: `GET /v1/firmware-scans/:id` (status check)
 
-- [DONE] Allow devices/dashboards to observe scan outcome
-  - **How:** `api/firmware_scan.go:GetScan` looks up the scan by primary key via `repository.GetByID`. Returns `200 OK` with the full record (status, vulns, timestamps), `404 Not Found` when the id doesn't exist, `400 Bad Request` for non-numeric ids. This makes the `pending → completed | failed` transition observable.
+- [DONE] Let devices and dashboards check the scan result
+  - **How:** `api/firmware_scan.go:GetScan` reads the scan by id with `repository.GetByID`. Returns `200 OK` with the full row. Returns `404 Not Found` if the id is missing. Returns `400 Bad Request` for a non-numeric id. This makes the `pending` to `completed`/`failed` transition visible.
 
 ---
 
 ### API: `PATCH /v1/findings/vulns`
 
-- [DONE] Append new CVE IDs to the global registry
+- [DONE] Append new CVE IDs to the registry
   - **How:** `repository/vulnerability.go` uses `INSERT INTO vulnerabilities (cve_id) SELECT unnest($1::text[]) ON CONFLICT (cve_id) DO NOTHING`.
 
-- [DONE] Deduplicate — final registry contains only unique IDs
-  - **How:** `UNIQUE(cve_id)` constraint in Postgres is the authoritative guard; `ON CONFLICT DO NOTHING` makes concurrent inserts of the same ID safe without application-level locking.
+- [DONE] Keep only unique IDs
+  - **How:** `UNIQUE(cve_id)` is the DB-level guard. `ON CONFLICT DO NOTHING` makes concurrent inserts of the same id safe without app locks.
 
-- [DONE] Concurrent requests to different replicas must not produce duplicates
-  - **How:** The `ON CONFLICT DO NOTHING` upsert is atomic at the DB level. All replicas share the same Postgres instance, so concurrent inserts are serialized by the DB engine — no application-level locking needed.
+- [DONE] Concurrent requests on different replicas must not create duplicates
+  - **How:** The upsert is atomic at the DB level. All replicas share the same Postgres. So conflicts are serialized by the DB itself.
 
 ---
 
 ### API: `GET /v1/findings/vulns`
 
-- [DONE] Return the current list of all unique CVE IDs
-  - **How:** `repository/vulnerability.go` `List()` queries `SELECT cve_id FROM vulnerabilities ORDER BY cve_id ASC`. Returns `[]string{}` (not `null`) when the registry is empty.
+- [DONE] Return the list of all unique CVE IDs
+  - **How:** `repository/vulnerability.go` `List()` runs `SELECT cve_id FROM vulnerabilities ORDER BY cve_id ASC`. Returns `[]string{}` (not `null`) when empty.
 
 ---
 
 ### Functional Requirements
 
-- [DONE] Validate incoming scan registrations
-  - **How:** `api/firmware_scan.go` rejects requests missing `device_id`, `firmware_version`, or `binary_hash` with `400 Bad Request`, and also enforces length limits (`device_id ≤ 255`, `firmware_version ≤ 100`, `binary_hash ≤ 64`) to prevent oversized payloads from reaching the DB. `api/vulnerability.go` rejects batches over 1000 entries or containing empty/oversized CVE IDs (structural check only — does not enforce the `CVE-YYYY-NNNNN` format).
+- [DONE] Validate scan requests
+  - **How:** `api/firmware_scan.go` returns `400 Bad Request` for missing `device_id`, `firmware_version`, or `binary_hash`. It also enforces length limits (`device_id ≤ 255`, `firmware_version ≤ 100`, `binary_hash ≤ 64`) so big payloads never reach the DB. `api/vulnerability.go` rejects batches over 1000 IDs and empty or too-long IDs. It does a structural check only. It does not enforce the `CVE-YYYY-NNNNN` format.
 
-- [DONE] Trigger asynchronous analysis after registration
-  - **How:** `service/firmware_scan.go` calls `river.InsertTx` inside the same DB transaction that creates the scan row. If the transaction rolls back, the job is never enqueued — no orphaned jobs.
+- [DONE] Run analysis asynchronously after registration
+  - **How:** `service/firmware_scan.go` calls `river.InsertTx` inside the same DB transaction that creates the scan row. If the tx rolls back, the job is never enqueued. No orphan jobs.
 
-- [DONE] Analysis process simulated
-  - **How:** `worker/analysis_worker.go` sleeps a random 1–59 seconds (`randFunc(59)+1`), then randomly picks one of three outcomes: failure (`outcome < 30`), CVE found (`30 ≤ outcome < 60`), or clean (`outcome ≥ 60`).
+- [DONE] Analysis is simulated
+  - **How:** `worker/analysis_worker.go` sleeps a random 1 to 59 seconds (`randFunc(59)+1`). Then it picks one of three outcomes: failure (`outcome < 30`), CVE found (`30 ≤ outcome < 60`), or clean (`outcome ≥ 60`).
 
-- [DONE] Device firmware state updated **only after** analysis completes successfully
-  - **How:** Worker calls `repo.UpdateResult(id, "completed", vulns)` only on the success path. On simulated failure the worker returns an error and River retries up to `MaxAttempts = 3` times. On the **final** failed attempt (`job.Attempt >= MaxAttempts`), the worker sets status to `"failed"` before returning the error so the row reaches a terminal state observable via `GET /v1/firmware-scans/:id`. `SentryMock` (registered as River's `ErrorHandler`) additionally logs final-attempt failures. The `status` column has a Postgres `CHECK (status IN ('pending', 'completed', 'failed'))` constraint so invalid statuses are rejected at the DB level.
+- [DONE] Update the firmware state only after a successful analysis
+  - **How:** The worker calls `repo.UpdateResult(id, "completed", vulns)` only on the success path. On simulated failure it returns an error. River retries up to `MaxAttempts = 3` times. On the final failed attempt (`job.Attempt >= MaxAttempts`), the worker sets `status = "failed"` before returning the error. So the row reaches a terminal state visible through `GET /v1/firmware-scans/:id`. `SentryMock` (registered as River's `ErrorHandler`) also logs final-attempt failures. The `status` column has a `CHECK (status IN ('pending', 'completed', 'failed'))` constraint so the DB rejects bad values.
 
 ---
 
 ### Non-Functional Requirements
 
 - [DONE] Tolerate repeated requests for the same firmware
-  - **How:** `ON CONFLICT (device_id, binary_hash)` upsert is idempotent. The second (and any further) request receives the existing scan record with no side effects.
+  - **How:** The `ON CONFLICT (device_id, binary_hash)` upsert is idempotent. Repeated requests return the existing scan record with no side effects.
 
-- [DONE] Handle multiple requests for the same device arriving close together (race condition)
-  - **How:** The unique constraint is enforced at the DB level. Two concurrent inserts for the same `(device_id, binary_hash)` — even from different replicas — will not both succeed; one will hit the conflict path and return the existing row without spawning a duplicate job.
+- [DONE] Handle near-simultaneous requests for the same device
+  - **How:** The unique constraint is enforced at the DB level. Two parallel inserts for the same `(device_id, binary_hash)` cannot both win. One hits the conflict path and returns the existing row without spawning a duplicate job.
 
 - [DONE] Analysis may take several seconds
-  - **How:** River processes jobs asynchronously in background workers. The HTTP handler returns immediately after enqueueing. Workers use `SKIP LOCKED` so many jobs can be processed in parallel without contention.
+  - **How:** River runs jobs asynchronously in background workers. The HTTP handler returns right after enqueueing. Workers use `SKIP LOCKED` so many jobs run in parallel with no contention.
 
-- [DONE] Tolerate temporary failures in dependent components
-  - **How:** River retries failed jobs up to `MaxAttempts = 3` with exponential back-off. The 30% simulated failure demonstrates this path. DB connection pooling (`pgxpool`) handles transient Postgres connectivity issues.
+- [DONE] Tolerate temporary failures in dependencies
+  - **How:** River retries failed jobs up to `MaxAttempts = 3` with exponential backoff. The 30% simulated failure exercises this path. `pgxpool` handles short Postgres outages.
 
-- [DONE] Handle bursts from thousands of devices
-  - **How:** Scan registration is a single transactional upsert + job insert — O(1) per request. River's `SKIP LOCKED` queue drains the backlog without worker contention. Additional River worker instances (horizontal scaling) can be added without any config change.
+- [DONE] Handle bursts of thousands of devices
+  - **How:** Scan registration is one upsert + one job insert. O(1) per request. River's `SKIP LOCKED` queue drains the backlog without worker contention. More worker instances can be added without any config change.
 
 ---
 
 ## Distributed Architecture (Multi-Replica)
 
-- [DONE] Works correctly across multiple replicas
-  - **How:** All shared state lives in Postgres — there is no in-process state. Any number of API replicas behind a load balancer all talk to the same DB, so reads and writes are always consistent.
+- [DONE] Works across multiple replicas
+  - **How:** All shared state lives in Postgres. There is no in-process state. Any number of API replicas behind a load balancer can use the same DB. Reads and writes stay consistent.
 
-- [DONE] No race conditions or duplicates under concurrent load
-  - **How:** Uniqueness is enforced by DB constraints (`UNIQUE(device_id, binary_hash)` and `UNIQUE(cve_id)`), not by application code. Concurrent requests on different replicas that race to insert the same record will have one succeed and one hit the conflict handler — never a duplicate.
+- [DONE] No race conditions or duplicates under load
+  - **How:** Uniqueness is enforced by DB constraints (`UNIQUE(device_id, binary_hash)` and `UNIQUE(cve_id)`). Not by application code. Two replicas racing on the same key cannot both win. One hits the conflict handler.
 
 ---
 
 ## Architectural Decisions
 
-- **Web Framework:** [Echo](https://echo.labstack.com/) — high performance, minimal overhead.
-- **Database driver:** [pgx/v5](https://github.com/jackc/pgx) — idiomatic, type-safe Postgres interface with connection pooling via `pgxpool`. The `pgxpool.Pool` is constructed once in `main.go` and explicitly injected into `server.NewServer` and the worker (no package-level singletons), so the API and worker share a single pool by construction rather than by accident.
-- **Job queue:** [River](https://riverqueue.com/) — Postgres-native queue with transactional job insertion, persistence, and automatic retries. Chosen to avoid introducing a separate message-broker dependency while still getting reliable async processing.
-- **Idempotency mechanism:** `INSERT ... ON CONFLICT ... RETURNING (xmax = 0)` — single round-trip that both upserts and tells the caller whether the row is new, avoiding a separate SELECT.
-- **Process layout:** API server and River workers run in the **same process** (`cmd/api/main.go` calls `riverClient.Start(ctx)` and `server.ListenAndServe()` side-by-side). Simple for local runs; in production they would be split into two binaries so HTTP and analysis workloads can scale independently.
+- **Web framework:** [Echo](https://echo.labstack.com/). High performance, low overhead.
+- **DB driver:** [pgx/v5](https://github.com/jackc/pgx). Idiomatic, type-safe Postgres client with `pgxpool` for connection pooling. The pool is built once in `main.go` and injected into `server.NewServer` and the worker. No package globals. So the API and worker share one pool by design.
+- **Job queue:** [River](https://riverqueue.com/). Postgres-native queue with transactional job insertion, persistence, and automatic retries. No extra broker needed.
+- **Idempotency:** `INSERT ... ON CONFLICT ... RETURNING (xmax = 0)`. One round-trip that upserts and tells us if the row is new. No second `SELECT` needed.
+- **Process layout:** The API and River workers run in the same process. `cmd/api/main.go` starts `riverClient.Start(ctx)` and `server.ListenAndServe()` side by side. Simple for local runs. In production they would be split into two binaries so HTTP and analysis workloads can scale on their own.
 
 ## Scaling Strategy
 
-- **More devices:** Add API replicas (stateless) and River worker replicas (point at the same DB). No code changes required.
-- **CVE registry at extreme scale:** Move to **Redis** `SADD` for O(1) set membership; keep Postgres as durable backup.
-- **Job throughput at extreme scale:** Replace River with **NATS JetStream** or **RabbitMQ** for higher message rates while keeping the same worker interface.
+- **More devices:** Add API replicas (stateless) and River worker replicas. All point at the same DB. No code changes.
+- **CVE registry at extreme scale:** Move to Redis `SADD` for O(1) set membership. Keep Postgres as a durable backup.
+- **Job throughput at extreme scale:** Replace River with NATS JetStream or RabbitMQ for higher message rates. Keep the same worker interface.
