@@ -23,17 +23,20 @@ func (m *MockScanRepository) Create(ctx context.Context, tx pgx.Tx, scan *model.
 	return args.Get(0).(repository.CreateResult), args.Error(1)
 }
 
-func (m *MockScanRepository) GetByDeviceAndHash(ctx context.Context, deviceID, hash string) (*model.FirmwareScan, error) {
-	args := m.Called(ctx, deviceID, hash)
+func (m *MockScanRepository) GetByID(ctx context.Context, id int) (*model.FirmwareScan, error) {
+	args := m.Called(ctx, id)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*model.FirmwareScan), args.Error(1)
 }
 
-func (m *MockScanRepository) UpdateStatus(ctx context.Context, id int, status string) error {
-	args := m.Called(ctx, id, status)
-	return args.Error(0)
+func (m *MockScanRepository) GetByDeviceAndHash(ctx context.Context, deviceID, hash string) (*model.FirmwareScan, error) {
+	args := m.Called(ctx, deviceID, hash)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*model.FirmwareScan), args.Error(1)
 }
 
 func (m *MockScanRepository) UpdateResult(ctx context.Context, id int, status string, vulns []string) error {
@@ -92,7 +95,7 @@ func TestFirmwareAnalysisWorker_Work(t *testing.T) {
 		return w, scanRepo, vulnRepo
 	}
 
-	t.Run("outcome fail", func(t *testing.T) {
+	t.Run("outcome fail - non-final attempt", func(t *testing.T) {
 		w, scanRepo, vulnRepo := setupWorker()
 		w.randFunc = func(n int) int {
 			if n == 100 {
@@ -102,6 +105,28 @@ func TestFirmwareAnalysisWorker_Work(t *testing.T) {
 		}
 
 		err := w.Work(ctx, newJob())
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "simulated temporary failure")
+		scanRepo.AssertExpectations(t)
+		vulnRepo.AssertExpectations(t)
+	})
+
+	t.Run("outcome fail - final attempt marks scan as failed", func(t *testing.T) {
+		w, scanRepo, vulnRepo := setupWorker()
+		w.randFunc = func(n int) int {
+			if n == 100 {
+				return 20 // < 30
+			}
+			return 0
+		}
+
+		finalJob := &river.Job[FirmwareAnalysisArgs]{
+			JobRow: &rivertype.JobRow{Attempt: 3, MaxAttempts: 3},
+			Args:   FirmwareAnalysisArgs{ID: 1},
+		}
+		scanRepo.On("UpdateResult", mock.Anything, 1, "failed", mock.Anything).Return(nil)
+
+		err := w.Work(ctx, finalJob)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "simulated temporary failure")
 		scanRepo.AssertExpectations(t)

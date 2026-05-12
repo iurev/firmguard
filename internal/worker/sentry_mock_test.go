@@ -13,17 +13,17 @@ import (
 func TestSentryMock_HandleError(t *testing.T) {
 	s := &SentryMock{}
 	ctx := context.Background()
-	err := errors.New("something failed")
+	theErr := errors.New("something failed")
 
 	t.Run("non-final attempt returns empty result", func(t *testing.T) {
 		job := &rivertype.JobRow{Attempt: 1, MaxAttempts: 3, Kind: "firmware_analysis"}
-		result := s.HandleError(ctx, job, err)
+		result := s.HandleError(ctx, job, theErr)
 		assert.Equal(t, &river.ErrorHandlerResult{}, result)
 	})
 
 	t.Run("final attempt returns empty result", func(t *testing.T) {
 		job := &rivertype.JobRow{Attempt: 3, MaxAttempts: 3, Kind: "firmware_analysis"}
-		result := s.HandleError(ctx, job, err)
+		result := s.HandleError(ctx, job, theErr)
 		assert.Equal(t, &river.ErrorHandlerResult{}, result)
 	})
 }

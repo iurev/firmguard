@@ -47,6 +47,9 @@ func (w *FirmwareAnalysisWorker) Work(ctx context.Context, job *river.Job[Firmwa
 
 	// 30% fail, 30% found (30-59), 40% not found (60-99)
 	if outcome < 30 {
+		if job.Attempt >= w.MaxAttempts() {
+			_ = w.scanRepo.UpdateResult(ctx, job.Args.ID, "failed", nil)
+		}
 		return fmt.Errorf("simulated temporary failure for scan %d", job.Args.ID)
 	}
 
