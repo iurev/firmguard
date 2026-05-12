@@ -57,23 +57,23 @@ End-to-end lifecycle of a single firmware scan from HTTP request through River w
 flowchart TD
     Start([Device sends POST /v1/firmware-scans])
 
-    Bind{c.Bind ok?}
-    RequiredFields{device_id,<br/>firmware_version,<br/>binary_hash present?}
-    Lengths{length limits<br/>respected?<br/>(255/100/64)}
+    Bind{"c.Bind ok?"}
+    RequiredFields{"device_id,<br/>firmware_version,<br/>binary_hash present?"}
+    Lengths{"length limits respected?<br/>255 / 100 / 64"}
 
     Bad400_Bind[/"400: invalid request body"/]
     Bad400_Fields[/"400: missing required fields"/]
     Bad400_Len[/"400: field exceeds max length"/]
 
-    BeginTx[Begin Postgres tx]
-    Upsert["INSERT ... ON CONFLICT (device_id, binary_hash)<br/>DO UPDATE SET updated_at = NOW()<br/>RETURNING id, status, (xmax = 0) AS is_inserted"]
+    BeginTx["Begin Postgres tx"]
+    Upsert["INSERT ... ON CONFLICT device_id, binary_hash<br/>DO UPDATE SET updated_at = NOW()<br/>RETURNING id, status, xmax = 0 AS is_inserted"]
 
-    IsNew{IsInserted?<br/>(xmax = 0)}
+    IsNew{"IsInserted?<br/>xmax = 0"}
 
-    EnqueueJob["river.InsertTx<br/>(same tx, kind=firmware_analysis)"]
-    SkipEnqueue[Skip enqueue — duplicate]
+    EnqueueJob["river.InsertTx<br/>same tx, kind=firmware_analysis"]
+    SkipEnqueue["Skip enqueue — duplicate"]
 
-    Commit[Commit tx]
+    Commit["Commit tx"]
     Resp202[/"202 Accepted + scan record"/]
     Resp200[/"200 OK + existing scan record"/]
 
@@ -89,40 +89,40 @@ flowchart TD
     IsNew -- yes --> EnqueueJob --> Commit --> Resp202
     IsNew -- no --> SkipEnqueue --> Commit --> Resp200
 
-    subgraph Async["Async — River worker (separate goroutine, started by riverClient.Start)"]
-        Pick["Worker picks job via SKIP LOCKED<br/>(MaxWorkers=10, MaxAttempts=3)"]
-        Sleep["sleep randFunc(59)+1<br/>= 1–59 seconds"]
-        Outcome{"randFunc(100)<br/>= outcome"}
+    subgraph Async["Async River worker — started by riverClient.Start"]
+        Pick["Worker picks job via SKIP LOCKED<br/>MaxWorkers=10, MaxAttempts=3"]
+        Sleep["sleep randFunc 59 + 1<br/>= 1–59 seconds"]
+        Outcome{"outcome = randFunc 100"}
 
-        FailBranch[outcome &lt; 30<br/>simulated failure]
-        FoundBranch[30 ≤ outcome &lt; 60<br/>vulnerability found]
-        CleanBranch[outcome ≥ 60<br/>clean]
+        FailBranch["outcome &lt; 30<br/>simulated failure"]
+        FoundBranch["30 ≤ outcome &lt; 60<br/>vulnerability found"]
+        CleanBranch["outcome ≥ 60<br/>clean"]
 
-        IsLastAttempt{"job.Attempt ≥<br/>MaxAttempts (3)?"}
-        SetFailed["UpdateResult(id, 'failed', nil)"]
-        ReturnErr[Return error → River schedules retry<br/>with exponential backoff]
+        IsLastAttempt{"job.Attempt ≥ MaxAttempts?"}
+        SetFailed["UpdateResult id, failed, nil"]
+        ReturnErr["Return error → River schedules retry<br/>with exponential backoff"]
         SentryLog["SentryMock.HandleError<br/>logs final-attempt failure"]
 
-        GetCVE["vulnRepo.GetRandom()<br/>ORDER BY RANDOM() LIMIT 1"]
-        UpdateFound["UpdateResult(id, 'completed', [cve])"]
-        UpdateClean["UpdateResult(id, 'completed', [])"]
+        GetCVE["vulnRepo.GetRandom<br/>ORDER BY RANDOM LIMIT 1"]
+        UpdateFound["UpdateResult id, completed, [cve]"]
+        UpdateClean["UpdateResult id, completed, []"]
 
-        JobDone([Job marked completed])
-        JobRetry([Job re-queued for retry])
-        JobDiscarded([Job moved to river_job_discarded<br/>scan row.status = 'failed'])
+        JobDone(["Job marked completed"])
+        JobRetry(["Job re-queued for retry"])
+        JobDiscarded(["Job moved to river_job_discarded<br/>scan row.status = failed"])
     end
 
-    Commit -. job becomes visible<br/>only after commit .-> Pick
+    Commit -. "job becomes visible only after commit" .-> Pick
     Pick --> Sleep --> Outcome
 
-    Outcome -- "&lt; 30 (30%)" --> FailBranch --> IsLastAttempt
+    Outcome -- "outcome &lt; 30 — 30%" --> FailBranch --> IsLastAttempt
     IsLastAttempt -- no --> ReturnErr --> JobRetry
     IsLastAttempt -- yes --> SetFailed --> ReturnErr --> SentryLog --> JobDiscarded
 
-    Outcome -- "30–59 (30%)" --> FoundBranch --> GetCVE --> UpdateFound --> JobDone
-    Outcome -- "≥ 60 (40%)" --> CleanBranch --> UpdateClean --> JobDone
+    Outcome -- "30–59 — 30%" --> FoundBranch --> GetCVE --> UpdateFound --> JobDone
+    Outcome -- "≥ 60 — 40%" --> CleanBranch --> UpdateClean --> JobDone
 
-    JobRetry -. River retries from start .-> Pick
+    JobRetry -. "River retries from start" .-> Pick
 ```
 
 **Key invariants this flow guarantees:**
@@ -140,20 +140,20 @@ How the distributed CVE registry handles writes, concurrent writes from multiple
 ```mermaid
 flowchart TD
     subgraph Write["PATCH /v1/findings/vulns — append"]
-        WStart([Client PATCHes {vulns: [...]}])
+        WStart(["Client PATCHes vulns array"])
 
-        WBind{c.Bind ok?}
+        WBind{"c.Bind ok?"}
         WBad400_Bind[/"400: invalid request body"/]
 
-        WSize{"len(vulns) ≤ 1000?"}
+        WSize{"len vulns ≤ 1000?"}
         WBad400_Size[/"400: too many vulnerabilities"/]
 
         WEachID{"for each id:<br/>non-empty AND<br/>len ≤ 20 chars?"}
         WBad400_ID[/"400: invalid CVE ID"/]
 
-        WUpsert["INSERT INTO vulnerabilities (cve_id)<br/>SELECT unnest($1::text[])<br/>ON CONFLICT (cve_id) DO NOTHING"]
+        WUpsert["INSERT INTO vulnerabilities cve_id<br/>SELECT unnest text array<br/>ON CONFLICT cve_id DO NOTHING"]
 
-        WErr{DB error?}
+        WErr{"DB error?"}
         WBad500[/"500: failed to register"/]
         WOk[/"204 No Content"/]
 
@@ -170,13 +170,13 @@ flowchart TD
     end
 
     subgraph Read["GET /v1/findings/vulns — read"]
-        RStart([Client GETs])
+        RStart(["Client GETs"])
         RQuery["SELECT cve_id FROM vulnerabilities<br/>ORDER BY cve_id ASC"]
-        RErr{DB error?}
+        RErr{"DB error?"}
         RBad500[/"500: failed to get vulnerabilities"/]
-        REmpty{rows empty?}
-        RFix["coerce nil → []string{}"]
-        ROk[/"200 OK: {vulns: [...]}"/]
+        REmpty{"rows empty?"}
+        RFix["coerce nil → empty string slice"]
+        ROk[/"200 OK with vulns array"/]
 
         RStart --> RQuery --> RErr
         RErr -- yes --> RBad500
@@ -186,10 +186,10 @@ flowchart TD
     end
 
     subgraph Concurrent["Concurrent writes from multiple replicas"]
-        R1["Replica A:<br/>PATCH {vulns: ['CVE-1', 'CVE-2']}"]
-        R2["Replica B:<br/>PATCH {vulns: ['CVE-2', 'CVE-3']}"]
-        PG[("Postgres<br/>UNIQUE(cve_id)<br/>+ ON CONFLICT DO NOTHING")]
-        Final["Final state: {CVE-1, CVE-2, CVE-3}<br/>— no duplicates, no app-level locks"]
+        R1["Replica A:<br/>PATCH vulns = CVE-1, CVE-2"]
+        R2["Replica B:<br/>PATCH vulns = CVE-2, CVE-3"]
+        PG[("Postgres<br/>UNIQUE cve_id<br/>+ ON CONFLICT DO NOTHING")]
+        Final["Final state: CVE-1, CVE-2, CVE-3<br/>no duplicates, no app-level locks"]
 
         R1 --> PG
         R2 --> PG
