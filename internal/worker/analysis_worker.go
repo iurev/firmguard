@@ -2,8 +2,8 @@ package worker
 
 import (
 	"context"
-	"fmt"
 	"firmguard/internal/repository"
+	"fmt"
 	"math/rand"
 	"os"
 	"time"
@@ -21,7 +21,7 @@ type FirmwareAnalysisWorker struct {
 	river.WorkerDefaults[FirmwareAnalysisArgs]
 	scanRepo repository.FirmwareScanRepository
 	vulnRepo repository.VulnerabilityRepository
-	
+
 	// For testing
 	sleepFunc func(time.Duration)
 	randFunc  func(int) int
@@ -29,8 +29,8 @@ type FirmwareAnalysisWorker struct {
 
 func NewFirmwareAnalysisWorker(scanRepo repository.FirmwareScanRepository, vulnRepo repository.VulnerabilityRepository) *FirmwareAnalysisWorker {
 	return &FirmwareAnalysisWorker{
-		scanRepo: scanRepo,
-		vulnRepo: vulnRepo,
+		scanRepo:  scanRepo,
+		vulnRepo:  vulnRepo,
 		sleepFunc: time.Sleep,
 		randFunc:  rand.Intn,
 	}
@@ -39,7 +39,7 @@ func NewFirmwareAnalysisWorker(scanRepo repository.FirmwareScanRepository, vulnR
 func (w *FirmwareAnalysisWorker) Work(ctx context.Context, job *river.Job[FirmwareAnalysisArgs]) error {
 	// Random delay 1-60s
 	delay := time.Duration(w.randFunc(59)+1) * time.Second
-	
+
 	// We use a select with a timer that can be mocked or bypassed
 	if w.sleepFunc != nil {
 		w.sleepFunc(delay)

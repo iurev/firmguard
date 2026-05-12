@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"firmguard/internal/model"
-	"firmguard/internal/service"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -45,7 +44,7 @@ func TestCreateScan(t *testing.T) {
 		})).Return(scan, nil)
 
 		if assert.NoError(t, h.CreateScan(c)) {
-			assert.Equal(t, http.StatusCreated, rec.Code)
+			assert.Equal(t, http.StatusAccepted, rec.Code)
 		}
 	})
 
@@ -74,7 +73,7 @@ func TestCreateScan(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, rec.Code)
 	})
 
-	t.Run("conflict", func(t *testing.T) {
+	t.Run("idempotent success", func(t *testing.T) {
 		e := echo.New()
 		svc := new(MockService)
 		h := NewFirmwareScanHandler(svc)
@@ -86,10 +85,10 @@ func TestCreateScan(t *testing.T) {
 		c := e.NewContext(req, rec)
 
 		existing := &model.FirmwareScan{ID: 1, DeviceID: "d1", FirmwareVersion: "v1", BinaryHash: "h1"}
-		svc.On("CreateScan", mock.Anything, mock.Anything).Return(existing, service.ErrScanAlreadyExists)
+		svc.On("CreateScan", mock.Anything, mock.Anything).Return(existing, nil)
 
 		assert.NoError(t, h.CreateScan(c))
-		assert.Equal(t, http.StatusConflict, rec.Code)
+		assert.Equal(t, http.StatusAccepted, rec.Code)
 	})
 
 	t.Run("internal error", func(t *testing.T) {

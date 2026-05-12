@@ -47,20 +47,17 @@ func (s *firmwareScanService) CreateScan(ctx context.Context, scan *model.Firmwa
 
 	scan.Status = "pending"
 	if err := s.repo.Create(ctx, tx, scan); err != nil {
-		if repository.IsUniqueViolation(err) {
-			existing, getErr := s.repo.GetByDeviceAndHash(ctx, scan.DeviceID, scan.BinaryHash)
-			if getErr == nil {
-				return existing, ErrScanAlreadyExists
-			}
-			return nil, err
-		}
 		return nil, err
 	}
 
-	// Enqueue background analysis
-	_, err = s.river.InsertTx(ctx, tx, worker.FirmwareAnalysisArgs{ID: scan.ID}, nil)
-	if err != nil {
-		return nil, err
+	// Only enqueue background analysis if it's a new scan.
+	// We detect this by checking if CreatedAt and UpdatedAt are equal,
+	// which happens on the initial INSERT but not on ON CONFLICT UPDATE.
+	if scan.CreatedAt.Equal(scan.UpdatedAt) {
+		_, err = s.river.InsertTx(ctx, tx, worker.FirmwareAnalysisArgs{ID: scan.ID}, nil)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {

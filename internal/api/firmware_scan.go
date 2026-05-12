@@ -1,7 +1,6 @@
 package api
 
 import (
-	"errors"
 	"firmguard/internal/model"
 	"firmguard/internal/service"
 	"net/http"
@@ -29,11 +28,8 @@ func (h *FirmwareScanHandler) CreateScan(c echo.Context) error {
 
 	result, err := h.svc.CreateScan(c.Request().Context(), &scan)
 	if err != nil {
-		if errors.Is(err, service.ErrScanAlreadyExists) {
-			return c.JSON(http.StatusConflict, result)
-		}
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "failed to create scan"})
 	}
 
-	return c.JSON(http.StatusCreated, result)
+	return c.JSON(http.StatusAccepted, result)
 }

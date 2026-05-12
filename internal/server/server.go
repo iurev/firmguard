@@ -11,9 +11,9 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	_ "github.com/joho/godotenv/autoload"
 	"github.com/riverqueue/river"
-	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 )
 
 type Server struct {
@@ -24,7 +24,7 @@ type Server struct {
 	vulnHdl *api.VulnerabilityHandler
 }
 
-func NewServer(riverClient *river.Client[riverpgxv5.Driver]) *http.Server {
+func NewServer(riverClient *river.Client[pgx.Tx]) *http.Server {
 	port, _ := strconv.Atoi(os.Getenv("PORT"))
 	db := database.New()
 
@@ -32,7 +32,7 @@ func NewServer(riverClient *river.Client[riverpgxv5.Driver]) *http.Server {
 	scanSvc := service.NewFirmwareScanService(db, scanRepo, riverClient)
 	scanHdl := api.NewFirmwareScanHandler(scanSvc)
 
-	vulnRepo := repository.NewVulnerabilityRepository(db.GetDB())
+	vulnRepo := repository.NewVulnerabilityRepository(db.GetPool())
 	vulnSvc := service.NewVulnerabilityService(vulnRepo)
 	vulnHdl := api.NewVulnerabilityHandler(vulnSvc)
 

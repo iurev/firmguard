@@ -10,7 +10,7 @@
 
 ## Technology Stack
 - [x] Language: Golang
-- [x] Database: Postgres (SQLx, goose migrations)
+- [x] Database: Postgres (pgx, goose migrations)
 - [x] Infrastructure: Docker, Docker Compose
 - [x] Framework: Echo
 - [x] Configuration: ENV flags (including SIMULATE_FAILURE)
@@ -18,18 +18,13 @@
 
 ## Tasks
 - [x] Initialize todo.md
-- [x] Initialize Go project (Standard structure: cmd/api, internal/)
 - [x] Setup Docker Compose & Goose migrations
 - [x] Implement Firmware Registration API (POST /v1/firmware-scans)
-- [x] Implement Asynchronous Worker Pool (Postgres-based queue)
-- [x] Add simulation failure logic (ENV gated)
-- [x] Achieve 100% code coverage for implemented logic
+- [x] Implement Asynchronous Worker Pool (River/Postgres)
 - [x] Implement CVE Registry API (PATCH/GET)
+- [x] Add simulation failure logic (30/30/40 outcomes)
+- [x] Align with `from-claude.md` (Atomic ON CONFLICT, 202 Accepted)
+- [x] Refactor to use `pgx` consistently (remove `sqlx`)
+- [x] Achieve 100% code coverage for api, service, worker, repository
+- [x] Maintain 100% coverage after refactoring
 - [x] Final Review & Documentation
-- [x] Integrate River for background jobs (Retries/Persistence)
-- [x] 100% code coverage for River worker and integration
-- [x] Add `vulns` (jsonb) field to `firmware_scans` table
-- [x] Update worker to simulate 1-60s delay and random outcomes (Found, Fail, Not Found)
-- [x] Maintain 100% code coverage across all layers
-- [x] Final Review & Documentation
-

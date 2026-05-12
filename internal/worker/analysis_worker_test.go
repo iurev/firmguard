@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"firmguard/internal/model"
+	"os"
 	"testing"
 	"time"
 
@@ -84,6 +85,9 @@ func TestFirmwareAnalysisWorker_Work(t *testing.T) {
 	}
 
 	t.Run("outcome fail", func(t *testing.T) {
+		os.Setenv("SIMULATE_FAILURE", "true")
+		defer os.Unsetenv("SIMULATE_FAILURE")
+		
 		worker, scanRepo, vulnRepo := setupWorker()
 		worker.randFunc = func(n int) int {
 			if n == 100 {
@@ -136,7 +140,7 @@ func TestFirmwareAnalysisWorker_Work(t *testing.T) {
 		scanRepo.AssertExpectations(t)
 		vulnRepo.AssertExpectations(t)
 	})
-	
+
 	t.Run("outcome found but no CVE in db", func(t *testing.T) {
 		worker, scanRepo, vulnRepo := setupWorker()
 		worker.randFunc = func(n int) int {

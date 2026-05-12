@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -15,12 +14,12 @@ import (
 	"firmguard/internal/server"
 	"firmguard/internal/worker"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 )
 
-func gracefulShutdown(apiServer *http.Server, riverClient *river.Client[riverpgxv5.Driver], done chan bool) {
+func gracefulShutdown(apiServer *http.Server, riverClient *river.Client[pgx.Tx], done chan bool) {
 	// Create context that listens for the interrupt signal from the OS.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -62,7 +61,7 @@ func main() {
 	// Initialize River
 	workers := river.NewWorkers()
 	scanRepo := repository.NewFirmwareScanRepository(db.GetPool())
-	vulnRepo := repository.NewVulnerabilityRepository(db.GetDB())
+	vulnRepo := repository.NewVulnerabilityRepository(db.GetPool())
 	river.AddWorker(workers, worker.NewFirmwareAnalysisWorker(scanRepo, vulnRepo))
 
 	riverClient, err := river.NewClient(riverpgxv5.New(dbPool), &river.Config{

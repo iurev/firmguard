@@ -1,28 +1,25 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"log"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivermigrate"
 )
 
 func main() {
-	migrator, err := rivermigrate.New[riverpgxv5.Driver](riverpgxv5.New(nil), nil)
+	migrator, err := rivermigrate.New[pgx.Tx](riverpgxv5.New(nil), nil)
 	if err != nil {
 		log.Fatal(err)
 	}
-	migrations, err := migrator.GetAvailableMigrations(context.Background())
-	if err != nil {
-		log.Fatal(err)
-	}
+	migrations := migrator.AllVersions()
 
 	fmt.Println("-- +goose Up")
 	for _, m := range migrations {
 		fmt.Printf("-- Migration version %d\n", m.Version)
-		fmt.Println(m.StatementsUp)
+		fmt.Println(m.SQLUp)
 		fmt.Println()
 	}
 
@@ -30,7 +27,7 @@ func main() {
 	for i := len(migrations) - 1; i >= 0; i-- {
 		m := migrations[i]
 		fmt.Printf("-- Migration version %d\n", m.Version)
-		fmt.Println(m.StatementsDown)
+		fmt.Println(m.SQLDown)
 		fmt.Println()
 	}
 }
