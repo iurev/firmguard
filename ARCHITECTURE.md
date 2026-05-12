@@ -23,9 +23,9 @@ flowchart LR
 
 ---
 
-## Flow: Firmware Scan (submit then background analysis)
+## Flow: Firmware Scan (HTTP side)
 
-How one scan goes from HTTP request to a final status.
+How one scan goes from HTTP request to a 200/202 response.
 
 ```mermaid
 flowchart TD
@@ -35,21 +35,33 @@ flowchart TD
     IsNew -- "no" --> Resp200["200 OK: duplicate, no extra work"]
     IsNew -- "yes" --> Enqueue["Enqueue analysis job<br/>same tx as the insert"]
     Enqueue --> Resp202["202 Accepted"]
-
-    Worker["Background worker"] -. "picks job" .-> Analyze["Simulate analysis"]
-    Analyze --> Outcome{"outcome"}
-    Outcome -- "fail" --> Retry{"attempts left?"}
-    Retry -- "yes" --> Analyze
-    Retry -- "no" --> Failed["status = failed"]
-    Outcome -- "CVE found" --> Done1["status = completed<br/>vulns saved"]
-    Outcome -- "clean" --> Done2["status = completed"]
 ```
 
 **Why this flow is safe:**
 - The scan row and the River job commit together. If `tx.Commit` fails, neither exists.
 - A worker cannot pick up a job before the scan row is visible. They share the same committed snapshot.
 - A duplicate POST is O(1) work: one upsert, no new job.
-- After `MaxAttempts` failed tries, the scan row becomes `failed`. So `GET /v1/firmware-scans/:id` always ends in `completed` or `failed`. It never stays `pending` forever.
+
+---
+
+## Flow: Background Worker
+
+How the River worker turns a queued job into a final scan status.
+
+```mermaid
+flowchart TD
+    JobTable[("river_jobs<br/>in Postgres")] -. "SKIP LOCKED pickup" .-> Worker["Background worker"]
+    Worker --> Analyze["Simulate analysis<br/>(sleep 1 to 59 s)"]
+    Analyze --> Outcome{"outcome"}
+    Outcome -- "fail" --> Fail["return error<br/>River retries up to 3x with exp backoff<br/>on final attempt: status = failed"]
+    Outcome -- "CVE found" --> Done1["status = completed<br/>vulns saved"]
+    Outcome -- "clean" --> Done2["status = completed"]
+```
+
+**Why River fits here:**
+- **Automated retries.** Failed jobs run again up to `MaxAttempts = 3` with exponential backoff. No retry code in the worker.
+- **Survives pod restarts.** Jobs live in Postgres, not in worker memory. If a pod dies mid-job, another worker picks it up via `SKIP LOCKED`. So `GET /v1/firmware-scans/:id` always ends in `completed` or `failed`. It never stays `pending` forever.
+- **Observability on failure.** `SentryMock` is registered as River's `ErrorHandler`. It receives every final-attempt failure with the job id, args, and error. In production this would forward to Sentry or Datadog.
 
 ---
 
