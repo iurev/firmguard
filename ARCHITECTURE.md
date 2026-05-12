@@ -14,7 +14,7 @@ flowchart TD
 
     subgraph Service["Service Layer"]
         FirmwareSvc["FirmwareScanService\n• validate\n• upsert scan (tx)\n• enqueue job (tx)"]
-        VulnSvc["VulnerabilityService\n• deduplicate in-memory\n• upsert to DB"]
+        VulnSvc["VulnerabilityService\n• upsert to DB"]
     end
 
     subgraph DB["PostgreSQL (shared state)"]
@@ -60,7 +60,7 @@ flowchart TD
   - **How:** `repository/firmware_scan.go` uses `INSERT ... ON CONFLICT (device_id, binary_hash) DO UPDATE SET updated_at = NOW()`. The Postgres `xmax` trick (`xmax = 0 AS is_inserted`) detects whether the row was freshly inserted or was a conflict. The River job is only enqueued in `service/firmware_scan.go` when `IsInserted = true`.
 
 - [DONE] Register a scan and return it
-  - **How:** Handler returns `202 Accepted` with the full scan record (including assigned `id` and `status = "pending"`).
+  - **How:** Handler returns `202 Accepted` with the full scan record (including assigned `id` and `status = "pending"`) for new scans, or `200 OK` with the existing record for duplicate submissions.
 
 ---
 
@@ -70,7 +70,7 @@ flowchart TD
   - **How:** `repository/vulnerability.go` uses `INSERT INTO vulnerabilities (cve_id) SELECT unnest($1::text[]) ON CONFLICT (cve_id) DO NOTHING`.
 
 - [DONE] Deduplicate — final registry contains only unique IDs
-  - **How:** Two layers: in-memory dedup in `service/vulnerability.go` (avoids wasted DB round-trips), then `UNIQUE(cve_id)` constraint in Postgres as the authoritative guard.
+  - **How:** `UNIQUE(cve_id)` constraint in Postgres is the authoritative guard; `ON CONFLICT DO NOTHING` makes concurrent inserts of the same ID safe without application-level locking.
 
 - [DONE] Concurrent requests to different replicas must not produce duplicates
   - **How:** The `ON CONFLICT DO NOTHING` upsert is atomic at the DB level. All replicas share the same Postgres instance, so concurrent inserts are serialized by the DB engine — no application-level locking needed.
@@ -96,7 +96,7 @@ flowchart TD
   - **How:** `worker/analysis_worker.go` sleeps a random 1–60 seconds, then randomly picks one of three outcomes (failure / CVE found / clean).
 
 - [DONE] Device firmware state updated **only after** analysis completes successfully
-  - **How:** Worker calls `repo.UpdateResult(id, "completed", vulns)` only on the success path. On simulated failure the worker returns an error, River retries up to `MaxAttempts = 3` times; the scan row stays in `"pending"` until a successful attempt.
+  - **How:** Worker calls `repo.UpdateResult(id, "completed", vulns)` only on the success path. On simulated failure the worker returns an error and River retries up to `MaxAttempts = 3` times. On the final failed attempt, the worker sets status to `"failed"` before returning the error; `SentryMock` then logs it.
 
 ---
 
