@@ -28,23 +28,6 @@ migrate-up:
 migrate-down:
 	@goose -dir migrations postgres "postgres://$(BLUEPRINT_DB_USERNAME):$(BLUEPRINT_DB_PASSWORD)@$(BLUEPRINT_DB_HOST):$(BLUEPRINT_DB_PORT)/$(BLUEPRINT_DB_DATABASE)?sslmode=disable&search_path=$(BLUEPRINT_DB_SCHEMA)" down
 
-itest:
-	@go test -v ./internal/database/...
-
-watch:
-	@if command -v air > /dev/null; then \
-	    air; \
-	else \
-	    read -p "Go's 'air' is not installed on your machine. Do you want to install it? [y/N] " choice; \
-	    if [ "$$choice" = "y" ] || [ "$$choice" = "Y" ]; then \
-	        go install github.com/air-verse/air@latest; \
-	        air; \
-	    else \
-	        echo "You can install it with 'go install github.com/air-verse/air@latest'"; \
-	        exit 1; \
-	    fi; \
-	fi
-
 test:
 	@go test -v ./internal/api/... ./internal/service/... ./internal/worker/... ./internal/repository/...
 
