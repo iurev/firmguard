@@ -245,6 +245,7 @@ CREATE UNLOGGED TABLE river_client_queue (
 );
 
 -- River main migration 006 [up]
+-- +goose StatementBegin
 CREATE OR REPLACE FUNCTION river_job_state_in_bitmask(bitmask BIT(8), state river_job_state)
 RETURNS boolean
 LANGUAGE SQL
@@ -262,6 +263,7 @@ AS $$
         ELSE 0
     END = 1;
 $$;
+-- +goose StatementEnd
 
 --
 -- Add `river_job.unique_states` and bring up an index on it.
@@ -311,6 +313,7 @@ DROP FUNCTION river_job_state_in_bitmask;
 -- If any non-main migrations are present, 005 is considered irreversible.
 --
 
+-- +goose StatementBegin
 DO
 $body$
 BEGIN
@@ -348,6 +351,7 @@ BEGIN
 END;
 $body$
 LANGUAGE 'plpgsql'; 
+-- +goose StatementEnd 
 
 --
 -- Drop `river_job.unique_key`.

@@ -40,7 +40,7 @@ flowchart TD
 **Why this flow is safe:**
 - The scan row and the River job commit together. If `tx.Commit` fails, neither exists.
 - A worker cannot pick up a job before the scan row is visible. They share the same committed snapshot.
-- A duplicate POST is O(1) work: one upsert, no new job.
+- If we send a duplicate POST: one upsert (won't save data), no new job.
 
 ---
 
@@ -168,7 +168,7 @@ flowchart TD
   - **How:** River retries failed jobs up to `MaxAttempts = 3` with exponential backoff. The 30% simulated failure exercises this path. `pgxpool` handles short Postgres outages.
 
 - [DONE] Handle bursts of thousands of devices
-  - **How:** Scan registration is one upsert + one job insert. O(1) per request. River's `SKIP LOCKED` queue drains the backlog without worker contention. More worker instances can be added without any config change.
+  - **How:** Scan registration is one upsert + one job insert. River's `SKIP LOCKED` queue drains the backlog without worker contention. More worker instances can be added without any config change.
 
 ---
 
@@ -193,5 +193,4 @@ flowchart TD
 ## Scaling Strategy
 
 - **More devices:** Add API replicas (stateless) and River worker replicas. All point at the same DB. No code changes.
-- **CVE registry at extreme scale:** Move to Redis `SADD` for O(1) set membership. Keep Postgres as a durable backup.
 - **Job throughput at extreme scale:** Replace River with NATS JetStream or RabbitMQ for higher message rates. Keep the same worker interface.
