@@ -29,74 +29,20 @@ End-to-end lifecycle of a single firmware scan from HTTP request through River w
 
 ```mermaid
 flowchart TD
-    Start([Device sends POST /v1/firmware-scans])
+    Device -->|"POST /v1/firmware-scans"| API
+    API --> Upsert[("firmware_scans<br/>upsert by device_id + binary_hash")]
+    Upsert --> IsNew{"new row?"}
+    IsNew -- "no" --> Resp200["200 OK — duplicate, no extra work"]
+    IsNew -- "yes" --> Enqueue["Enqueue analysis job<br/>same tx as the insert"]
+    Enqueue --> Resp202["202 Accepted"]
 
-    Bind{"c.Bind ok?"}
-    RequiredFields{"device_id,<br/>firmware_version,<br/>binary_hash present?"}
-    Lengths{"length limits respected?<br/>255 / 100 / 64"}
-
-    Bad400_Bind[/"400: invalid request body"/]
-    Bad400_Fields[/"400: missing required fields"/]
-    Bad400_Len[/"400: field exceeds max length"/]
-
-    BeginTx["Begin Postgres tx"]
-    Upsert["INSERT ... ON CONFLICT device_id, binary_hash<br/>DO UPDATE SET updated_at = NOW()<br/>RETURNING id, status, xmax = 0 AS is_inserted"]
-
-    IsNew{"IsInserted?<br/>xmax = 0"}
-
-    EnqueueJob["river.InsertTx<br/>same tx, kind=firmware_analysis"]
-    SkipEnqueue["Skip enqueue — duplicate"]
-
-    Commit["Commit tx"]
-    Resp202[/"202 Accepted + scan record"/]
-    Resp200[/"200 OK + existing scan record"/]
-
-    Start --> Bind
-    Bind -- no --> Bad400_Bind
-    Bind -- yes --> RequiredFields
-    RequiredFields -- no --> Bad400_Fields
-    RequiredFields -- yes --> Lengths
-    Lengths -- no --> Bad400_Len
-    Lengths -- yes --> BeginTx
-    BeginTx --> Upsert
-    Upsert --> IsNew
-    IsNew -- yes --> EnqueueJob --> Commit --> Resp202
-    IsNew -- no --> SkipEnqueue --> Commit --> Resp200
-
-    subgraph Async["Async River worker — started by riverClient.Start"]
-        Pick["Worker picks job via SKIP LOCKED<br/>MaxWorkers=10, MaxAttempts=3"]
-        Sleep["sleep randFunc 59 + 1<br/>= 1–59 seconds"]
-        Outcome{"outcome = randFunc 100"}
-
-        FailBranch["outcome &lt; 30<br/>simulated failure"]
-        FoundBranch["30 ≤ outcome &lt; 60<br/>vulnerability found"]
-        CleanBranch["outcome ≥ 60<br/>clean"]
-
-        IsLastAttempt{"job.Attempt ≥ MaxAttempts?"}
-        SetFailed["UpdateResult id, failed, nil"]
-        ReturnErr["Return error → River schedules retry<br/>with exponential backoff"]
-        SentryLog["SentryMock.HandleError<br/>logs final-attempt failure"]
-
-        GetCVE["vulnRepo.GetRandom<br/>ORDER BY RANDOM LIMIT 1"]
-        UpdateFound["UpdateResult id, completed, [cve]"]
-        UpdateClean["UpdateResult id, completed, []"]
-
-        JobDone(["Job marked completed"])
-        JobRetry(["Job re-queued for retry"])
-        JobDiscarded(["Job moved to river_job_discarded<br/>scan row.status = failed"])
-    end
-
-    Commit -. "job becomes visible only after commit" .-> Pick
-    Pick --> Sleep --> Outcome
-
-    Outcome -- "outcome &lt; 30 — 30%" --> FailBranch --> IsLastAttempt
-    IsLastAttempt -- no --> ReturnErr --> JobRetry
-    IsLastAttempt -- yes --> SetFailed --> ReturnErr --> SentryLog --> JobDiscarded
-
-    Outcome -- "30–59 — 30%" --> FoundBranch --> GetCVE --> UpdateFound --> JobDone
-    Outcome -- "≥ 60 — 40%" --> CleanBranch --> UpdateClean --> JobDone
-
-    JobRetry -. "River retries from start" .-> Pick
+    Worker["Background worker"] -. "picks job" .-> Analyze["Simulate analysis"]
+    Analyze --> Outcome{"outcome"}
+    Outcome -- "fail" --> Retry{"attempts left?"}
+    Retry -- "yes" --> Analyze
+    Retry -- "no" --> Failed["status = failed"]
+    Outcome -- "CVE found" --> Done1["status = completed<br/>vulns saved"]
+    Outcome -- "clean" --> Done2["status = completed"]
 ```
 
 **Key invariants this flow guarantees:**
@@ -113,61 +59,16 @@ How the distributed CVE registry handles writes, concurrent writes from multiple
 
 ```mermaid
 flowchart TD
-    subgraph Write["PATCH /v1/findings/vulns — append"]
-        WStart(["Client PATCHes vulns array"])
-
-        WBind{"c.Bind ok?"}
-        WBad400_Bind[/"400: invalid request body"/]
-
-        WSize{"len vulns ≤ 1000?"}
-        WBad400_Size[/"400: too many vulnerabilities"/]
-
-        WEachID{"for each id:<br/>non-empty AND<br/>len ≤ 20 chars?"}
-        WBad400_ID[/"400: invalid CVE ID"/]
-
-        WUpsert["INSERT INTO vulnerabilities cve_id<br/>SELECT unnest text array<br/>ON CONFLICT cve_id DO NOTHING"]
-
-        WErr{"DB error?"}
-        WBad500[/"500: failed to register"/]
-        WOk[/"204 No Content"/]
-
-        WStart --> WBind
-        WBind -- no --> WBad400_Bind
-        WBind -- yes --> WSize
-        WSize -- no --> WBad400_Size
-        WSize -- yes --> WEachID
-        WEachID -- no --> WBad400_ID
-        WEachID -- yes --> WUpsert
-        WUpsert --> WErr
-        WErr -- yes --> WBad500
-        WErr -- no --> WOk
+    subgraph PATCH ["PATCH /v1/findings/vulns — append"]
+        ClientP[Client] -->|"vulns array"| APIP[API]
+        APIP --> UpsertCVE[("INSERT ... ON CONFLICT cve_id DO NOTHING<br/>dedup happens here")]
+        UpsertCVE --> R204["204 No Content"]
     end
 
-    subgraph Read["GET /v1/findings/vulns — read"]
-        RStart(["Client GETs"])
-        RQuery["SELECT cve_id FROM vulnerabilities<br/>ORDER BY cve_id ASC"]
-        RErr{"DB error?"}
-        RBad500[/"500: failed to get vulnerabilities"/]
-        REmpty{"rows empty?"}
-        RFix["coerce nil → empty string slice"]
-        ROk[/"200 OK with vulns array"/]
-
-        RStart --> RQuery --> RErr
-        RErr -- yes --> RBad500
-        RErr -- no --> REmpty
-        REmpty -- yes --> RFix --> ROk
-        REmpty -- no --> ROk
-    end
-
-    subgraph Concurrent["Concurrent writes from multiple replicas"]
-        R1["Replica A:<br/>PATCH vulns = CVE-1, CVE-2"]
-        R2["Replica B:<br/>PATCH vulns = CVE-2, CVE-3"]
-        PG[("Postgres<br/>UNIQUE cve_id<br/>+ ON CONFLICT DO NOTHING")]
-        Final["Final state: CVE-1, CVE-2, CVE-3<br/>no duplicates, no app-level locks"]
-
-        R1 --> PG
-        R2 --> PG
-        PG --> Final
+    subgraph GET ["GET /v1/findings/vulns — read"]
+        ClientG[Client] --> APIG[API]
+        APIG --> ListCVE[("SELECT cve_id FROM vulnerabilities")]
+        ListCVE --> R200["200 OK — unique CVE list"]
     end
 ```
 
