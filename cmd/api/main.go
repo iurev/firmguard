@@ -83,7 +83,7 @@ func main() {
 		log.Fatalf("failed to start river client: %v", err)
 	}
 
-	server := server.NewServer(riverClient)
+	server := server.NewServer(db, riverClient)
 
 	// Create a done channel to signal when the shutdown is complete
 	done := make(chan bool, 1)

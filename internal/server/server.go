@@ -24,9 +24,8 @@ type Server struct {
 	vulnHdl *api.VulnerabilityHandler
 }
 
-func NewServer(riverClient *river.Client[pgx.Tx]) *http.Server {
+func NewServer(db database.Service, riverClient *river.Client[pgx.Tx]) *http.Server {
 	port, _ := strconv.Atoi(os.Getenv("PORT"))
-	db := database.New()
 
 	scanRepo := repository.NewFirmwareScanRepository(db.GetPool())
 	scanSvc := service.NewFirmwareScanService(db, scanRepo, riverClient)
