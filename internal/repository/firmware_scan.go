@@ -16,7 +16,6 @@ type CreateResult struct {
 type FirmwareScanRepository interface {
 	Create(ctx context.Context, tx pgx.Tx, scan *model.FirmwareScan) (CreateResult, error)
 	GetByID(ctx context.Context, id int) (*model.FirmwareScan, error)
-	GetByDeviceAndHash(ctx context.Context, deviceID, hash string) (*model.FirmwareScan, error)
 	UpdateResult(ctx context.Context, id int, status string, vulns []string) error
 }
 
@@ -50,20 +49,6 @@ func (r *firmwareScanRepository) GetByID(ctx context.Context, id int) (*model.Fi
 	          FROM firmware_scans WHERE id = $1`
 	var scan model.FirmwareScan
 	err := r.pool.QueryRow(ctx, query, id).Scan(
-		&scan.ID, &scan.DeviceID, &scan.FirmwareVersion, &scan.BinaryHash,
-		&scan.Metadata, &scan.Status, &scan.Vulns, &scan.CreatedAt, &scan.UpdatedAt,
-	)
-	if err != nil {
-		return nil, err
-	}
-	return &scan, nil
-}
-
-func (r *firmwareScanRepository) GetByDeviceAndHash(ctx context.Context, deviceID, hash string) (*model.FirmwareScan, error) {
-	query := `SELECT id, device_id, firmware_version, binary_hash, metadata, status, vulns, created_at, updated_at
-	          FROM firmware_scans WHERE device_id = $1 AND binary_hash = $2`
-	var scan model.FirmwareScan
-	err := r.pool.QueryRow(ctx, query, deviceID, hash).Scan(
 		&scan.ID, &scan.DeviceID, &scan.FirmwareVersion, &scan.BinaryHash,
 		&scan.Metadata, &scan.Status, &scan.Vulns, &scan.CreatedAt, &scan.UpdatedAt,
 	)

@@ -84,16 +84,6 @@ func TestFirmwareScanRepository(t *testing.T) {
 		assert.ErrorIs(t, err, pgx.ErrNoRows)
 	})
 
-	t.Run("GetByDeviceAndHash", func(t *testing.T) {
-		scan, err := repo.GetByDeviceAndHash(ctx, "dev1", "hash1")
-		require.NoError(t, err)
-		assert.Equal(t, "dev1", scan.DeviceID)
-		assert.Equal(t, "hash1", scan.BinaryHash)
-
-		_, err = repo.GetByDeviceAndHash(ctx, "nonexistent", "hash")
-		assert.ErrorIs(t, err, pgx.ErrNoRows)
-	})
-
 	t.Run("UpdateResult", func(t *testing.T) {
 		scan := &model.FirmwareScan{
 			DeviceID:        "dev4",
@@ -101,14 +91,14 @@ func TestFirmwareScanRepository(t *testing.T) {
 			BinaryHash:      "hash4",
 			Status:          "pending",
 		}
-		_, err := repo.Create(ctx, nil, scan)
+		res, err := repo.Create(ctx, nil, scan)
 		require.NoError(t, err)
 
 		vulns := []string{"CVE-2021-1234", "CVE-2021-5678"}
-		err = repo.UpdateResult(ctx, scan.ID, "completed", vulns)
+		err = repo.UpdateResult(ctx, res.Scan.ID, "completed", vulns)
 		require.NoError(t, err)
 
-		updated, err := repo.GetByDeviceAndHash(ctx, "dev4", "hash4")
+		updated, err := repo.GetByID(ctx, res.Scan.ID)
 		require.NoError(t, err)
 		assert.Equal(t, "completed", updated.Status)
 
@@ -120,7 +110,7 @@ func TestFirmwareScanRepository(t *testing.T) {
 		err = repo.UpdateResult(ctx, 999999, "completed", vulns)
 		assert.ErrorIs(t, err, pgx.ErrNoRows)
 
-		err = repo.UpdateResult(ctx, scan.ID, "completed", nil)
+		err = repo.UpdateResult(ctx, res.Scan.ID, "completed", nil)
 		require.NoError(t, err)
 	})
 
@@ -132,9 +122,6 @@ func TestFirmwareScanRepository(t *testing.T) {
 		assert.Error(t, err)
 
 		_, err = repo.GetByID(cancelCtx, 1)
-		assert.Error(t, err)
-
-		_, err = repo.GetByDeviceAndHash(cancelCtx, "d", "h")
 		assert.Error(t, err)
 
 		err = repo.UpdateResult(cancelCtx, 1, "completed", nil)

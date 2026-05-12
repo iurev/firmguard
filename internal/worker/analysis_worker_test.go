@@ -31,14 +31,6 @@ func (m *MockScanRepository) GetByID(ctx context.Context, id int) (*model.Firmwa
 	return args.Get(0).(*model.FirmwareScan), args.Error(1)
 }
 
-func (m *MockScanRepository) GetByDeviceAndHash(ctx context.Context, deviceID, hash string) (*model.FirmwareScan, error) {
-	args := m.Called(ctx, deviceID, hash)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*model.FirmwareScan), args.Error(1)
-}
-
 func (m *MockScanRepository) UpdateResult(ctx context.Context, id int, status string, vulns []string) error {
 	args := m.Called(ctx, id, status, vulns)
 	return args.Error(0)
