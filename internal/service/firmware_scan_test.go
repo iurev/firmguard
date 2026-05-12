@@ -128,15 +128,15 @@ func TestCreateScan(t *testing.T) {
 		repo := new(MockRepository)
 		riverClient := new(MockRiverClient)
 		svc := NewFirmwareScanService(db, repo, riverClient)
-		
+
 		now := time.Now()
 		scan := &model.FirmwareScan{DeviceID: "d1", BinaryHash: "h1"}
 		existing := &model.FirmwareScan{
-			ID: 1, 
-			DeviceID: "d1", 
+			ID:         1,
+			DeviceID:   "d1",
 			BinaryHash: "h1",
-			CreatedAt: now,
-			UpdatedAt: now.Add(time.Second),
+			CreatedAt:  now,
+			UpdatedAt:  now.Add(time.Second),
 		}
 
 		db.On("Begin", ctx).Return(tx, nil)
@@ -188,7 +188,7 @@ func TestCreateScan(t *testing.T) {
 		repo := new(MockRepository)
 		riverClient := new(MockRiverClient)
 		svc := NewFirmwareScanService(db, repo, riverClient)
-		
+
 		now := time.Now()
 		scan := &model.FirmwareScan{DeviceID: "d1", BinaryHash: "h1"}
 
@@ -213,7 +213,7 @@ func TestCreateScan(t *testing.T) {
 		repo := new(MockRepository)
 		riverClient := new(MockRiverClient)
 		svc := NewFirmwareScanService(db, repo, riverClient)
-		
+
 		now := time.Now()
 		scan := &model.FirmwareScan{DeviceID: "d1", BinaryHash: "h1"}
 

@@ -68,7 +68,8 @@ func main() {
 		Queues: map[string]river.QueueConfig{
 			river.QueueDefault: {MaxWorkers: 10},
 		},
-		Workers: workers,
+		Workers:      workers,
+		ErrorHandler: &worker.SentryMock{},
 	})
 	if err != nil {
 		log.Fatalf("failed to create river client: %v", err)

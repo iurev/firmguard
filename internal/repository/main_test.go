@@ -66,7 +66,7 @@ func TestMain(m *testing.M) {
 }
 
 func runMigrations(ctx context.Context, pool *pgxpool.Pool) error {
-	// Find migrations directory. Since we are in internal/repository, 
+	// Find migrations directory. Since we are in internal/repository,
 	// migrations are at ../../migrations
 	migrationsDir := "../../migrations"
 	files, err := os.ReadDir(migrationsDir)

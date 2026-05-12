@@ -4,12 +4,12 @@ import (
 	"context"
 	"firmguard/internal/model"
 	"firmguard/internal/repository"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -68,37 +68,40 @@ func TestFirmwareAnalysisArgs_Kind(t *testing.T) {
 func TestNewFirmwareAnalysisWorker(t *testing.T) {
 	scanRepo := new(MockScanRepository)
 	vulnRepo := new(MockVulnRepository)
-	worker := NewFirmwareAnalysisWorker(scanRepo, vulnRepo)
-	assert.NotNil(t, worker)
-	assert.Equal(t, scanRepo, worker.scanRepo)
-	assert.Equal(t, vulnRepo, worker.vulnRepo)
+	w := NewFirmwareAnalysisWorker(scanRepo, vulnRepo)
+	assert.NotNil(t, w)
+	assert.Equal(t, scanRepo, w.scanRepo)
+	assert.Equal(t, vulnRepo, w.vulnRepo)
 }
 
 func TestFirmwareAnalysisWorker_Work(t *testing.T) {
 	ctx := context.Background()
 
+	newJob := func() *river.Job[FirmwareAnalysisArgs] {
+		return &river.Job[FirmwareAnalysisArgs]{
+			JobRow: &rivertype.JobRow{Attempt: 1, MaxAttempts: 3},
+			Args:   FirmwareAnalysisArgs{ID: 1},
+		}
+	}
+
 	setupWorker := func() (*FirmwareAnalysisWorker, *MockScanRepository, *MockVulnRepository) {
 		scanRepo := new(MockScanRepository)
 		vulnRepo := new(MockVulnRepository)
-		worker := NewFirmwareAnalysisWorker(scanRepo, vulnRepo)
-		worker.sleepFunc = func(time.Duration) {} // No sleep in tests
-		return worker, scanRepo, vulnRepo
+		w := NewFirmwareAnalysisWorker(scanRepo, vulnRepo)
+		w.sleepFunc = func(time.Duration) {}
+		return w, scanRepo, vulnRepo
 	}
 
 	t.Run("outcome fail", func(t *testing.T) {
-		os.Setenv("SIMULATE_FAILURE", "true")
-		defer os.Unsetenv("SIMULATE_FAILURE")
-		
-		worker, scanRepo, vulnRepo := setupWorker()
-		worker.randFunc = func(n int) int {
+		w, scanRepo, vulnRepo := setupWorker()
+		w.randFunc = func(n int) int {
 			if n == 100 {
 				return 20 // < 30
 			}
 			return 0
 		}
-		job := &river.Job[FirmwareAnalysisArgs]{Args: FirmwareAnalysisArgs{ID: 1}}
 
-		err := worker.Work(ctx, job)
+		err := w.Work(ctx, newJob())
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "simulated temporary failure")
 		scanRepo.AssertExpectations(t)
@@ -106,56 +109,53 @@ func TestFirmwareAnalysisWorker_Work(t *testing.T) {
 	})
 
 	t.Run("outcome found", func(t *testing.T) {
-		worker, scanRepo, vulnRepo := setupWorker()
-		worker.randFunc = func(n int) int {
+		w, scanRepo, vulnRepo := setupWorker()
+		w.randFunc = func(n int) int {
 			if n == 100 {
 				return 45 // 30-59
 			}
 			return 0
 		}
-		job := &river.Job[FirmwareAnalysisArgs]{Args: FirmwareAnalysisArgs{ID: 1}}
 
 		vulnRepo.On("GetRandom", mock.Anything).Return("CVE-123", nil)
 		scanRepo.On("UpdateResult", mock.Anything, 1, "completed", []string{"CVE-123"}).Return(nil)
 
-		err := worker.Work(ctx, job)
+		err := w.Work(ctx, newJob())
 		assert.NoError(t, err)
 		scanRepo.AssertExpectations(t)
 		vulnRepo.AssertExpectations(t)
 	})
 
 	t.Run("outcome not found", func(t *testing.T) {
-		worker, scanRepo, vulnRepo := setupWorker()
-		worker.randFunc = func(n int) int {
+		w, scanRepo, vulnRepo := setupWorker()
+		w.randFunc = func(n int) int {
 			if n == 100 {
 				return 80 // >= 60
 			}
 			return 0
 		}
-		job := &river.Job[FirmwareAnalysisArgs]{Args: FirmwareAnalysisArgs{ID: 1}}
 
 		scanRepo.On("UpdateResult", mock.Anything, 1, "completed", []string(nil)).Return(nil)
 
-		err := worker.Work(ctx, job)
+		err := w.Work(ctx, newJob())
 		assert.NoError(t, err)
 		scanRepo.AssertExpectations(t)
 		vulnRepo.AssertExpectations(t)
 	})
 
 	t.Run("outcome found but no CVE in db", func(t *testing.T) {
-		worker, scanRepo, vulnRepo := setupWorker()
-		worker.randFunc = func(n int) int {
+		w, scanRepo, vulnRepo := setupWorker()
+		w.randFunc = func(n int) int {
 			if n == 100 {
 				return 45
 			}
 			return 0
 		}
-		job := &river.Job[FirmwareAnalysisArgs]{Args: FirmwareAnalysisArgs{ID: 1}}
 
 		vulnRepo.On("GetRandom", mock.Anything).Return("", nil)
 		scanRepo.On("UpdateResult", mock.Anything, 1, "completed", []string(nil)).Return(nil)
 
-		err := worker.Work(ctx, job)
+		err := w.Work(ctx, newJob())
 		assert.NoError(t, err)
 		scanRepo.AssertExpectations(t)
 		vulnRepo.AssertExpectations(t)

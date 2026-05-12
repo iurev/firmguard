@@ -116,7 +116,7 @@ func TestFirmwareScanRepository(t *testing.T) {
 		updated, err := repo.GetByDeviceAndHash(ctx, "dev4", "hash4")
 		require.NoError(t, err)
 		assert.Equal(t, "completed", updated.Status)
-		
+
 		var resultVulns []string
 		err = json.Unmarshal(updated.Vulns, &resultVulns)
 		require.NoError(t, err)
