@@ -24,11 +24,12 @@ func TestFirmwareScanRepository(t *testing.T) {
 			Status:          "pending",
 		}
 
-		err := repo.Create(ctx, nil, scan)
+		res, err := repo.Create(ctx, nil, scan)
 		require.NoError(t, err)
-		assert.NotZero(t, scan.ID)
-		assert.NotEmpty(t, scan.CreatedAt)
-		assert.NotEmpty(t, scan.UpdatedAt)
+		assert.True(t, res.IsInserted)
+		assert.NotZero(t, res.Scan.ID)
+		assert.NotEmpty(t, res.Scan.CreatedAt)
+		assert.NotEmpty(t, res.Scan.UpdatedAt)
 
 		t.Run("WithTransaction", func(t *testing.T) {
 			tx, err := testPool.Begin(ctx)
@@ -42,26 +43,27 @@ func TestFirmwareScanRepository(t *testing.T) {
 				Status:          "pending",
 			}
 
-			err = repo.Create(ctx, tx, scan2)
+			res, err = repo.Create(ctx, tx, scan2)
 			require.NoError(t, err)
-			assert.NotZero(t, scan2.ID)
+			assert.True(t, res.IsInserted)
+			assert.NotZero(t, res.Scan.ID)
 
 			err = tx.Commit(ctx)
 			require.NoError(t, err)
 		})
 
 		t.Run("DuplicateEntry", func(t *testing.T) {
-			// Create is designed with ON CONFLICT DO UPDATE SET updated_at = EXCLUDED.updated_at
-			// So it won't return an error for duplicates unless we specifically cause one.
-			// Let's check the behavior.
+			// Create is designed with ON CONFLICT DO UPDATE SET updated_at = NOW()
+			// It should return isInserted = false for duplicates.
 			scanDup := &model.FirmwareScan{
 				DeviceID:        "dev1",
 				FirmwareVersion: "1.0.0",
 				BinaryHash:      "hash1",
 				Status:          "pending",
 			}
-			err := repo.Create(ctx, nil, scanDup)
-			require.NoError(t, err) // Should succeed due to ON CONFLICT
+			res, err := repo.Create(ctx, nil, scanDup)
+			require.NoError(t, err)
+			assert.False(t, res.IsInserted)
 		})
 	})
 
@@ -83,7 +85,7 @@ func TestFirmwareScanRepository(t *testing.T) {
 			BinaryHash:      "hash3",
 			Status:          "pending",
 		}
-		err := repo.Create(ctx, nil, scan)
+		_, err := repo.Create(ctx, nil, scan)
 		require.NoError(t, err)
 
 		err = repo.UpdateStatus(ctx, scan.ID, "completed")
@@ -104,7 +106,7 @@ func TestFirmwareScanRepository(t *testing.T) {
 			BinaryHash:      "hash4",
 			Status:          "pending",
 		}
-		err := repo.Create(ctx, nil, scan)
+		_, err := repo.Create(ctx, nil, scan)
 		require.NoError(t, err)
 
 		vulns := []string{"CVE-2021-1234", "CVE-2021-5678"}
@@ -142,7 +144,7 @@ func TestFirmwareScanRepository(t *testing.T) {
 		cancelCtx, cancel := context.WithCancel(ctx)
 		cancel()
 
-		err := repo.Create(cancelCtx, nil, &model.FirmwareScan{})
+		_, err := repo.Create(cancelCtx, nil, &model.FirmwareScan{})
 		assert.Error(t, err)
 
 		_, err = repo.GetByDeviceAndHash(cancelCtx, "d", "h")

@@ -46,15 +46,14 @@ func (s *firmwareScanService) CreateScan(ctx context.Context, scan *model.Firmwa
 	defer tx.Rollback(ctx)
 
 	scan.Status = "pending"
-	if err := s.repo.Create(ctx, tx, scan); err != nil {
+	res, err := s.repo.Create(ctx, tx, scan)
+	if err != nil {
 		return nil, err
 	}
 
 	// Only enqueue background analysis if it's a new scan.
-	// We detect this by checking if CreatedAt and UpdatedAt are equal,
-	// which happens on the initial INSERT but not on ON CONFLICT UPDATE.
-	if scan.CreatedAt.Equal(scan.UpdatedAt) {
-		_, err = s.river.InsertTx(ctx, tx, worker.FirmwareAnalysisArgs{ID: scan.ID}, nil)
+	if res.IsInserted {
+		_, err = s.river.InsertTx(ctx, tx, worker.FirmwareAnalysisArgs{ID: res.Scan.ID}, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -64,5 +63,5 @@ func (s *firmwareScanService) CreateScan(ctx context.Context, scan *model.Firmwa
 		return nil, err
 	}
 
-	return scan, nil
+	return res.Scan, nil
 }

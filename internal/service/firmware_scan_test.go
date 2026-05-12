@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"firmguard/internal/model"
+	"firmguard/internal/repository"
 	"firmguard/internal/worker"
 	"testing"
 	"time"
@@ -48,13 +49,13 @@ type MockRepository struct {
 	mock.Mock
 }
 
-func (m *MockRepository) Create(ctx context.Context, tx pgx.Tx, scan *model.FirmwareScan) error {
+func (m *MockRepository) Create(ctx context.Context, tx pgx.Tx, scan *model.FirmwareScan) (repository.CreateResult, error) {
 	args := m.Called(ctx, tx, scan)
-	err := args.Error(0)
+	err := args.Error(1)
 	if err == nil {
 		scan.ID = 1
 	}
-	return err
+	return args.Get(0).(repository.CreateResult), err
 }
 
 func (m *MockRepository) GetByDeviceAndHash(ctx context.Context, deviceID, hash string) (*model.FirmwareScan, error) {
@@ -107,7 +108,7 @@ func TestCreateScan(t *testing.T) {
 		scan := &model.FirmwareScan{DeviceID: "d1", BinaryHash: "h1"}
 
 		db.On("Begin", ctx).Return(tx, nil)
-		repo.On("Create", ctx, tx, scan).Return(nil)
+		repo.On("Create", ctx, tx, scan).Return(repository.CreateResult{Scan: scan, IsInserted: true}, nil)
 		riverClient.On("InsertTx", ctx, tx, worker.FirmwareAnalysisArgs{ID: 1}, mock.Anything).Return(&rivertype.JobInsertResult{}, nil)
 		tx.On("Commit", ctx).Return(nil)
 		tx.On("Rollback", ctx).Return(nil)
@@ -142,7 +143,7 @@ func TestCreateScan(t *testing.T) {
 		repo.On("Create", ctx, tx, scan).Run(func(args mock.Arguments) {
 			s := args.Get(2).(*model.FirmwareScan)
 			*s = *existing
-		}).Return(nil)
+		}).Return(repository.CreateResult{Scan: existing, IsInserted: false}, nil)
 		tx.On("Commit", ctx).Return(nil)
 		tx.On("Rollback", ctx).Return(nil)
 
@@ -160,7 +161,7 @@ func TestCreateScan(t *testing.T) {
 		scan := &model.FirmwareScan{DeviceID: "d1", BinaryHash: "h1"}
 
 		db.On("Begin", ctx).Return(tx, nil)
-		repo.On("Create", ctx, tx, scan).Return(errors.New("db error"))
+		repo.On("Create", ctx, tx, scan).Return(repository.CreateResult{}, errors.New("db error"))
 		tx.On("Rollback", ctx).Return(nil)
 
 		result, err := svc.CreateScan(ctx, scan)
@@ -197,7 +198,7 @@ func TestCreateScan(t *testing.T) {
 			s.ID = 1
 			s.CreatedAt = now
 			s.UpdatedAt = now
-		}).Return(nil)
+		}).Return(repository.CreateResult{Scan: scan, IsInserted: true}, nil)
 		riverClient.On("InsertTx", ctx, tx, worker.FirmwareAnalysisArgs{ID: 1}, mock.Anything).Return(nil, errors.New("river error"))
 		tx.On("Rollback", ctx).Return(nil)
 
@@ -222,7 +223,7 @@ func TestCreateScan(t *testing.T) {
 			s.ID = 1
 			s.CreatedAt = now
 			s.UpdatedAt = now
-		}).Return(nil)
+		}).Return(repository.CreateResult{Scan: scan, IsInserted: true}, nil)
 		riverClient.On("InsertTx", ctx, tx, worker.FirmwareAnalysisArgs{ID: 1}, mock.Anything).Return(&rivertype.JobInsertResult{}, nil)
 		tx.On("Commit", ctx).Return(errors.New("commit error"))
 		tx.On("Rollback", ctx).Return(nil)

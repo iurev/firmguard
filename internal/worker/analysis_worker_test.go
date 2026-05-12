@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"firmguard/internal/model"
+	"firmguard/internal/repository"
 	"os"
 	"testing"
 	"time"
@@ -17,9 +18,9 @@ type MockScanRepository struct {
 	mock.Mock
 }
 
-func (m *MockScanRepository) Create(ctx context.Context, tx pgx.Tx, scan *model.FirmwareScan) error {
+func (m *MockScanRepository) Create(ctx context.Context, tx pgx.Tx, scan *model.FirmwareScan) (repository.CreateResult, error) {
 	args := m.Called(ctx, tx, scan)
-	return args.Error(0)
+	return args.Get(0).(repository.CreateResult), args.Error(1)
 }
 
 func (m *MockScanRepository) GetByDeviceAndHash(ctx context.Context, deviceID, hash string) (*model.FirmwareScan, error) {

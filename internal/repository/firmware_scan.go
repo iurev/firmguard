@@ -20,8 +20,13 @@ func IsUniqueViolation(err error) bool {
 
 var ErrDuplicate = errors.New("duplicate entry")
 
+type CreateResult struct {
+	Scan       *model.FirmwareScan
+	IsInserted bool
+}
+
 type FirmwareScanRepository interface {
-	Create(ctx context.Context, tx pgx.Tx, scan *model.FirmwareScan) error
+	Create(ctx context.Context, tx pgx.Tx, scan *model.FirmwareScan) (CreateResult, error)
 	GetByDeviceAndHash(ctx context.Context, deviceID, hash string) (*model.FirmwareScan, error)
 	UpdateStatus(ctx context.Context, id int, status string) error
 	UpdateResult(ctx context.Context, id int, status string, vulns []string) error
@@ -35,25 +40,28 @@ func NewFirmwareScanRepository(pool *pgxpool.Pool) FirmwareScanRepository {
 	return &firmwareScanRepository{pool: pool}
 }
 
-func (r *firmwareScanRepository) Create(ctx context.Context, tx pgx.Tx, scan *model.FirmwareScan) error {
+func (r *firmwareScanRepository) Create(ctx context.Context, tx pgx.Tx, scan *model.FirmwareScan) (CreateResult, error) {
 	query := `INSERT INTO firmware_scans (device_id, firmware_version, binary_hash, metadata, status) 
 			  VALUES ($1, $2, $3, $4, $5) 
 			  ON CONFLICT (device_id, binary_hash) 
-			  DO UPDATE SET updated_at = EXCLUDED.updated_at 
-			  RETURNING id, status, created_at, updated_at`
+			  DO UPDATE SET updated_at = NOW() 
+			  RETURNING id, status, created_at, updated_at, (xmax = 0) AS is_inserted`
 
+	var isInserted bool
 	var err error
 	if tx != nil {
-		err = tx.QueryRow(ctx, query, scan.DeviceID, scan.FirmwareVersion, scan.BinaryHash, scan.Metadata, scan.Status).Scan(&scan.ID, &scan.Status, &scan.CreatedAt, &scan.UpdatedAt)
+		err = tx.QueryRow(ctx, query, scan.DeviceID, scan.FirmwareVersion, scan.BinaryHash, scan.Metadata, scan.Status).Scan(&scan.ID, &scan.Status, &scan.CreatedAt, &scan.UpdatedAt, &isInserted)
 	} else {
-		err = r.pool.QueryRow(ctx, query, scan.DeviceID, scan.FirmwareVersion, scan.BinaryHash, scan.Metadata, scan.Status).Scan(&scan.ID, &scan.Status, &scan.CreatedAt, &scan.UpdatedAt)
+		err = r.pool.QueryRow(ctx, query, scan.DeviceID, scan.FirmwareVersion, scan.BinaryHash, scan.Metadata, scan.Status).Scan(&scan.ID, &scan.Status, &scan.CreatedAt, &scan.UpdatedAt, &isInserted)
 	}
-	return err
+	return CreateResult{Scan: scan, IsInserted: isInserted}, err
 }
 
 func (r *firmwareScanRepository) GetByDeviceAndHash(ctx context.Context, deviceID, hash string) (*model.FirmwareScan, error) {
 	query := `SELECT id, device_id, firmware_version, binary_hash, metadata, status, vulns, created_at, updated_at 
-			  FROM firmware_scans WHERE device_id = $1 AND binary_hash = $2`
+			  FROM firmware_scans
+			  WHERE device_id = $1
+			  AND binary_hash = $2`
 
 	rows, err := r.pool.Query(ctx, query, deviceID, hash)
 	if err != nil {
