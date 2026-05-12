@@ -11,7 +11,6 @@ CREATE TABLE firmware_scans (
     UNIQUE(device_id, binary_hash)
 );
 
-CREATE INDEX idx_firmware_scans_device_id ON firmware_scans(device_id);
 CREATE INDEX idx_firmware_scans_binary_hash ON firmware_scans(binary_hash);
 
 -- +goose Down
