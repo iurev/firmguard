@@ -5,7 +5,7 @@ CREATE TABLE firmware_scans (
     firmware_version TEXT NOT NULL,
     binary_hash TEXT NOT NULL,
     metadata JSONB,
-    status TEXT NOT NULL DEFAULT 'pending',
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'completed', 'failed')),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(device_id, binary_hash)
