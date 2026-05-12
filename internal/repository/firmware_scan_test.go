@@ -124,13 +124,6 @@ func TestFirmwareScanRepository(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	t.Run("IsUniqueViolation", func(t *testing.T) {
-		_, err := testPool.Exec(ctx, "INSERT INTO firmware_scans (device_id, firmware_version, binary_hash, status) VALUES ('dev1', '1.0.0', 'hash1', 'pending')")
-		assert.True(t, IsUniqueViolation(err))
-		assert.False(t, IsUniqueViolation(nil))
-		assert.False(t, IsUniqueViolation(assert.AnError))
-	})
-
 	t.Run("ContextCancellation", func(t *testing.T) {
 		cancelCtx, cancel := context.WithCancel(ctx)
 		cancel()

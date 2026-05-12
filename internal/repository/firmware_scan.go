@@ -2,21 +2,11 @@ package repository
 
 import (
 	"context"
-	"errors"
 	"firmguard/internal/model"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
-
-func IsUniqueViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) {
-		return pgErr.Code == "23505"
-	}
-	return false
-}
 
 type CreateResult struct {
 	Scan       *model.FirmwareScan
