@@ -2,50 +2,24 @@
 
 ## System Diagram
 
+The system has three runtime components (plus the device/client that talks to it):
+
 ```mermaid
-flowchart TD
+flowchart LR
     Device([Device / Client])
+    API["Go API<br/>Echo HTTP server"]
+    Worker["Go Background Worker<br/>River"]
+    DB[("Postgres<br/>firmware_scans<br/>vulnerabilities<br/>river_jobs")]
 
-    subgraph API["API Layer (Echo)"]
-        POST["POST /v1/firmware-scans"]
-        GETSCAN["GET /v1/firmware-scans/:id"]
-        PATCH["PATCH /v1/findings/vulns"]
-        GET["GET /v1/findings/vulns"]
-    end
-
-    subgraph Service["Service Layer"]
-        FirmwareSvc["FirmwareScanService\n• validate\n• upsert scan (tx)\n• enqueue job (tx)\n• lookup by id"]
-        VulnSvc["VulnerabilityService\n• upsert to DB"]
-    end
-
-    subgraph DB["PostgreSQL (shared state)"]
-        FirmwareTable[("firmware_scans\nUNIQUE(device_id, binary_hash)")]
-        VulnTable[("vulnerabilities\nUNIQUE(cve_id)")]
-        RiverTable[("river_jobs")]
-    end
-
-    subgraph Workers["River Workers (async)"]
-        Worker["FirmwareAnalysisWorker\n• random 1-59s delay\n• 30% simulated failure → retry\n• after MaxAttempts: status=failed\n• 30% found CVE\n• 40% clean"]
-    end
-
-    Device -->|"POST scan"| POST
-    Device -->|"GET scan by id"| GETSCAN
-    Device -->|"PATCH vulns"| PATCH
-    Device -->|"GET vulns"| GET
-
-    POST --> FirmwareSvc
-    GETSCAN --> FirmwareSvc
-    PATCH --> VulnSvc
-    GET --> VulnSvc
-
-    FirmwareSvc -->|"INSERT ON CONFLICT ... RETURNING xmax"| FirmwareTable
-    FirmwareSvc -->|"InsertTx (same tx)"| RiverTable
-    VulnSvc -->|"INSERT ... ON CONFLICT DO NOTHING"| VulnTable
-
-    RiverTable -->|"SKIP LOCKED poll"| Worker
-    Worker -->|"UpdateResult (status + vulns)"| FirmwareTable
-    Worker -->|"GetRandom CVE"| VulnTable
+    Device -->|HTTP| API
+    API -->|"SQL + river.InsertTx"| DB
+    DB -. "SKIP LOCKED job pickup" .-> Worker
+    Worker -->|"UpdateResult"| DB
 ```
+
+- **Go API** — Echo-based HTTP server. Accepts scan registrations and CVE writes/reads, enqueues background jobs transactionally.
+- **Go Background Worker (River)** — long-running worker process that picks up `firmware_analysis` jobs from Postgres via `SKIP LOCKED`, simulates analysis, and writes results back. Currently runs in the same binary as the API; in production it would be a separate deployment.
+- **Postgres** — single source of truth. Holds the domain tables (`firmware_scans`, `vulnerabilities`) and the queue table (`river_jobs`). Uniqueness constraints + `ON CONFLICT` give us idempotency and cross-replica safety with no extra infrastructure.
 
 ---
 
