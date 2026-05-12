@@ -53,8 +53,6 @@ func TestFirmwareScanRepository(t *testing.T) {
 		})
 
 		t.Run("DuplicateEntry", func(t *testing.T) {
-			// Create is designed with ON CONFLICT DO UPDATE SET updated_at = NOW()
-			// It should return isInserted = false for duplicates.
 			scanDup := &model.FirmwareScan{
 				DeviceID:        "dev1",
 				FirmwareVersion: "1.0.0",
@@ -67,6 +65,25 @@ func TestFirmwareScanRepository(t *testing.T) {
 		})
 	})
 
+	t.Run("GetByID", func(t *testing.T) {
+		scan := &model.FirmwareScan{
+			DeviceID:        "dev-getbyid",
+			FirmwareVersion: "1.0.0",
+			BinaryHash:      "hash-getbyid",
+			Status:          "pending",
+		}
+		res, err := repo.Create(ctx, nil, scan)
+		require.NoError(t, err)
+
+		found, err := repo.GetByID(ctx, res.Scan.ID)
+		require.NoError(t, err)
+		assert.Equal(t, res.Scan.ID, found.ID)
+		assert.Equal(t, "dev-getbyid", found.DeviceID)
+
+		_, err = repo.GetByID(ctx, 999999)
+		assert.ErrorIs(t, err, pgx.ErrNoRows)
+	})
+
 	t.Run("GetByDeviceAndHash", func(t *testing.T) {
 		scan, err := repo.GetByDeviceAndHash(ctx, "dev1", "hash1")
 		require.NoError(t, err)
@@ -74,28 +91,6 @@ func TestFirmwareScanRepository(t *testing.T) {
 		assert.Equal(t, "hash1", scan.BinaryHash)
 
 		_, err = repo.GetByDeviceAndHash(ctx, "nonexistent", "hash")
-		assert.ErrorIs(t, err, pgx.ErrNoRows)
-	})
-
-	t.Run("UpdateStatus", func(t *testing.T) {
-		// Create a scan to update
-		scan := &model.FirmwareScan{
-			DeviceID:        "dev3",
-			FirmwareVersion: "3.0.0",
-			BinaryHash:      "hash3",
-			Status:          "pending",
-		}
-		_, err := repo.Create(ctx, nil, scan)
-		require.NoError(t, err)
-
-		err = repo.UpdateStatus(ctx, scan.ID, "completed")
-		require.NoError(t, err)
-
-		updated, err := repo.GetByDeviceAndHash(ctx, "dev3", "hash3")
-		require.NoError(t, err)
-		assert.Equal(t, "completed", updated.Status)
-
-		err = repo.UpdateStatus(ctx, 999999, "completed")
 		assert.ErrorIs(t, err, pgx.ErrNoRows)
 	})
 
@@ -125,15 +120,11 @@ func TestFirmwareScanRepository(t *testing.T) {
 		err = repo.UpdateResult(ctx, 999999, "completed", vulns)
 		assert.ErrorIs(t, err, pgx.ErrNoRows)
 
-		// Test with nil vulns
 		err = repo.UpdateResult(ctx, scan.ID, "completed", nil)
 		require.NoError(t, err)
 	})
 
 	t.Run("IsUniqueViolation", func(t *testing.T) {
-		// We need to trigger a real unique violation.
-		// firmware_scans has UNIQUE(device_id, binary_hash) but Create uses ON CONFLICT.
-		// Let's try to insert directly with an error.
 		_, err := testPool.Exec(ctx, "INSERT INTO firmware_scans (device_id, firmware_version, binary_hash, status) VALUES ('dev1', '1.0.0', 'hash1', 'pending')")
 		assert.True(t, IsUniqueViolation(err))
 		assert.False(t, IsUniqueViolation(nil))
@@ -147,13 +138,13 @@ func TestFirmwareScanRepository(t *testing.T) {
 		_, err := repo.Create(cancelCtx, nil, &model.FirmwareScan{})
 		assert.Error(t, err)
 
+		_, err = repo.GetByID(cancelCtx, 1)
+		assert.Error(t, err)
+
 		_, err = repo.GetByDeviceAndHash(cancelCtx, "d", "h")
 		assert.Error(t, err)
 
-		err = repo.UpdateStatus(cancelCtx, 1, "s")
-		assert.Error(t, err)
-
-		err = repo.UpdateResult(cancelCtx, 1, "s", nil)
+		err = repo.UpdateResult(cancelCtx, 1, "completed", nil)
 		assert.Error(t, err)
 	})
 }
