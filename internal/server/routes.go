@@ -26,6 +26,7 @@ func (s *Server) RegisterRoutes() http.Handler {
 
 	v1 := e.Group("/v1")
 	v1.POST("/firmware-scans", s.scanHdl.CreateScan)
+	v1.GET("/firmware-scans/:id", s.scanHdl.GetScan)
 
 	findings := v1.Group("/findings")
 	findings.PATCH("/vulns", s.vulnHdl.RegisterVulnerabilities)

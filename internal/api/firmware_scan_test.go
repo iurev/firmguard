@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -20,6 +21,14 @@ type MockService struct {
 
 func (m *MockService) CreateScan(ctx context.Context, scan *model.FirmwareScan) (*model.FirmwareScan, error) {
 	args := m.Called(ctx, scan)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*model.FirmwareScan), args.Error(1)
+}
+
+func (m *MockService) GetScan(ctx context.Context, id int) (*model.FirmwareScan, error) {
+	args := m.Called(ctx, id)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -73,6 +82,20 @@ func TestCreateScan(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, rec.Code)
 	})
 
+	t.Run("field too long", func(t *testing.T) {
+		e := echo.New()
+		h := NewFirmwareScanHandler(nil)
+		longHash := string(make([]byte, 65))
+		payload := `{"device_id":"d1","firmware_version":"v1","binary_hash":"` + longHash + `"}`
+		req := httptest.NewRequest(http.MethodPost, "/v1/firmware-scans", bytes.NewBufferString(payload))
+		req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+
+		assert.NoError(t, h.CreateScan(c))
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+	})
+
 	t.Run("idempotent success", func(t *testing.T) {
 		e := echo.New()
 		svc := new(MockService)
@@ -105,6 +128,74 @@ func TestCreateScan(t *testing.T) {
 		svc.On("CreateScan", mock.Anything, mock.Anything).Return(nil, errors.New("error"))
 
 		assert.NoError(t, h.CreateScan(c))
+		assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	})
+}
+
+func TestGetScan(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		e := echo.New()
+		svc := new(MockService)
+		h := NewFirmwareScanHandler(svc)
+
+		req := httptest.NewRequest(http.MethodGet, "/v1/firmware-scans/1", nil)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		c.SetParamNames("id")
+		c.SetParamValues("1")
+
+		scan := &model.FirmwareScan{ID: 1, DeviceID: "d1"}
+		svc.On("GetScan", mock.Anything, 1).Return(scan, nil)
+
+		assert.NoError(t, h.GetScan(c))
+		assert.Equal(t, http.StatusOK, rec.Code)
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		e := echo.New()
+		svc := new(MockService)
+		h := NewFirmwareScanHandler(svc)
+
+		req := httptest.NewRequest(http.MethodGet, "/v1/firmware-scans/999", nil)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		c.SetParamNames("id")
+		c.SetParamValues("999")
+
+		svc.On("GetScan", mock.Anything, 999).Return(nil, pgx.ErrNoRows)
+
+		assert.NoError(t, h.GetScan(c))
+		assert.Equal(t, http.StatusNotFound, rec.Code)
+	})
+
+	t.Run("invalid id", func(t *testing.T) {
+		e := echo.New()
+		h := NewFirmwareScanHandler(nil)
+
+		req := httptest.NewRequest(http.MethodGet, "/v1/firmware-scans/abc", nil)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		c.SetParamNames("id")
+		c.SetParamValues("abc")
+
+		assert.NoError(t, h.GetScan(c))
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+	})
+
+	t.Run("internal error", func(t *testing.T) {
+		e := echo.New()
+		svc := new(MockService)
+		h := NewFirmwareScanHandler(svc)
+
+		req := httptest.NewRequest(http.MethodGet, "/v1/firmware-scans/1", nil)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		c.SetParamNames("id")
+		c.SetParamValues("1")
+
+		svc.On("GetScan", mock.Anything, 1).Return(nil, errors.New("db error"))
+
+		assert.NoError(t, h.GetScan(c))
 		assert.Equal(t, http.StatusInternalServerError, rec.Code)
 	})
 }
