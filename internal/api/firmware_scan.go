@@ -35,12 +35,15 @@ func (h *FirmwareScanHandler) CreateScan(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, echo.Map{"error": "field exceeds maximum length"})
 	}
 
-	result, err := h.svc.CreateScan(c.Request().Context(), &scan)
+	result, isNew, err := h.svc.CreateScan(c.Request().Context(), &scan)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "failed to create scan"})
 	}
 
-	return c.JSON(http.StatusAccepted, result)
+	if isNew {
+		return c.JSON(http.StatusAccepted, result)
+	}
+	return c.JSON(http.StatusOK, result)
 }
 
 func (h *FirmwareScanHandler) GetScan(c echo.Context) error {

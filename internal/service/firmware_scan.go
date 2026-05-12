@@ -13,7 +13,7 @@ import (
 )
 
 type FirmwareScanService interface {
-	CreateScan(ctx context.Context, scan *model.FirmwareScan) (*model.FirmwareScan, error)
+	CreateScan(ctx context.Context, scan *model.FirmwareScan) (*model.FirmwareScan, bool, error)
 	GetScan(ctx context.Context, id int) (*model.FirmwareScan, error)
 }
 
@@ -36,32 +36,32 @@ func NewFirmwareScanService(db database.Service, repo repository.FirmwareScanRep
 	}
 }
 
-func (s *firmwareScanService) CreateScan(ctx context.Context, scan *model.FirmwareScan) (*model.FirmwareScan, error) {
+func (s *firmwareScanService) CreateScan(ctx context.Context, scan *model.FirmwareScan) (*model.FirmwareScan, bool, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer tx.Rollback(ctx)
 
 	scan.Status = "pending"
 	res, err := s.repo.Create(ctx, tx, scan)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	// Only enqueue background analysis if it's a new scan.
 	if res.IsInserted {
 		_, err = s.river.InsertTx(ctx, tx, worker.FirmwareAnalysisArgs{ID: res.Scan.ID}, nil)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
-	return res.Scan, nil
+	return res.Scan, res.IsInserted, nil
 }
 
 func (s *firmwareScanService) GetScan(ctx context.Context, id int) (*model.FirmwareScan, error) {

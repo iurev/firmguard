@@ -116,7 +116,7 @@ func TestCreateScan(t *testing.T) {
 		tx.On("Commit", ctx).Return(nil)
 		tx.On("Rollback", ctx).Return(nil)
 
-		result, err := svc.CreateScan(ctx, scan)
+		result, _, err := svc.CreateScan(ctx, scan)
 		assert.NoError(t, err)
 		assert.Equal(t, "pending", result.Status)
 
@@ -150,7 +150,7 @@ func TestCreateScan(t *testing.T) {
 		tx.On("Commit", ctx).Return(nil)
 		tx.On("Rollback", ctx).Return(nil)
 
-		result, err := svc.CreateScan(ctx, scan)
+		result, _, err := svc.CreateScan(ctx, scan)
 		assert.NoError(t, err)
 		assert.Equal(t, existing, result)
 	})
@@ -167,7 +167,7 @@ func TestCreateScan(t *testing.T) {
 		repo.On("Create", ctx, tx, scan).Return(repository.CreateResult{}, errors.New("db error"))
 		tx.On("Rollback", ctx).Return(nil)
 
-		result, err := svc.CreateScan(ctx, scan)
+		result, _, err := svc.CreateScan(ctx, scan)
 		assert.Error(t, err)
 		assert.Nil(t, result)
 	})
@@ -180,7 +180,7 @@ func TestCreateScan(t *testing.T) {
 
 		db.On("Begin", ctx).Return(nil, errors.New("begin error"))
 
-		result, err := svc.CreateScan(ctx, &model.FirmwareScan{})
+		result, _, err := svc.CreateScan(ctx, &model.FirmwareScan{})
 		assert.Error(t, err)
 		assert.Nil(t, result)
 	})
@@ -205,7 +205,7 @@ func TestCreateScan(t *testing.T) {
 		riverClient.On("InsertTx", ctx, tx, worker.FirmwareAnalysisArgs{ID: 1}, mock.Anything).Return(nil, errors.New("river error"))
 		tx.On("Rollback", ctx).Return(nil)
 
-		result, err := svc.CreateScan(ctx, scan)
+		result, _, err := svc.CreateScan(ctx, scan)
 		assert.Error(t, err)
 		assert.Nil(t, result)
 	})
@@ -231,7 +231,7 @@ func TestCreateScan(t *testing.T) {
 		tx.On("Commit", ctx).Return(errors.New("commit error"))
 		tx.On("Rollback", ctx).Return(nil)
 
-		result, err := svc.CreateScan(ctx, scan)
+		result, _, err := svc.CreateScan(ctx, scan)
 		assert.Error(t, err)
 		assert.Nil(t, result)
 	})

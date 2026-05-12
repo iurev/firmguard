@@ -19,12 +19,12 @@ type MockService struct {
 	mock.Mock
 }
 
-func (m *MockService) CreateScan(ctx context.Context, scan *model.FirmwareScan) (*model.FirmwareScan, error) {
+func (m *MockService) CreateScan(ctx context.Context, scan *model.FirmwareScan) (*model.FirmwareScan, bool, error) {
 	args := m.Called(ctx, scan)
 	if args.Get(0) == nil {
-		return nil, args.Error(1)
+		return nil, false, args.Error(2)
 	}
-	return args.Get(0).(*model.FirmwareScan), args.Error(1)
+	return args.Get(0).(*model.FirmwareScan), args.Bool(1), args.Error(2)
 }
 
 func (m *MockService) GetScan(ctx context.Context, id int) (*model.FirmwareScan, error) {
@@ -50,7 +50,7 @@ func TestCreateScan(t *testing.T) {
 		scan := &model.FirmwareScan{DeviceID: "d1", FirmwareVersion: "v1", BinaryHash: "h1"}
 		svc.On("CreateScan", mock.Anything, mock.MatchedBy(func(s *model.FirmwareScan) bool {
 			return s.DeviceID == "d1" && s.FirmwareVersion == "v1" && s.BinaryHash == "h1"
-		})).Return(scan, nil)
+		})).Return(scan, true, nil)
 
 		if assert.NoError(t, h.CreateScan(c)) {
 			assert.Equal(t, http.StatusAccepted, rec.Code)
@@ -108,10 +108,10 @@ func TestCreateScan(t *testing.T) {
 		c := e.NewContext(req, rec)
 
 		existing := &model.FirmwareScan{ID: 1, DeviceID: "d1", FirmwareVersion: "v1", BinaryHash: "h1"}
-		svc.On("CreateScan", mock.Anything, mock.Anything).Return(existing, nil)
+		svc.On("CreateScan", mock.Anything, mock.Anything).Return(existing, false, nil)
 
 		assert.NoError(t, h.CreateScan(c))
-		assert.Equal(t, http.StatusAccepted, rec.Code)
+		assert.Equal(t, http.StatusOK, rec.Code)
 	})
 
 	t.Run("internal error", func(t *testing.T) {
@@ -125,7 +125,7 @@ func TestCreateScan(t *testing.T) {
 		rec := httptest.NewRecorder()
 		c := e.NewContext(req, rec)
 
-		svc.On("CreateScan", mock.Anything, mock.Anything).Return(nil, errors.New("error"))
+		svc.On("CreateScan", mock.Anything, mock.Anything).Return(nil, false, errors.New("error"))
 
 		assert.NoError(t, h.CreateScan(c))
 		assert.Equal(t, http.StatusInternalServerError, rec.Code)
