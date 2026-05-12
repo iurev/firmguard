@@ -58,17 +58,20 @@ func (m *MockRepository) Create(ctx context.Context, tx pgx.Tx, scan *model.Firm
 	return args.Get(0).(repository.CreateResult), err
 }
 
-func (m *MockRepository) GetByDeviceAndHash(ctx context.Context, deviceID, hash string) (*model.FirmwareScan, error) {
-	args := m.Called(ctx, deviceID, hash)
+func (m *MockRepository) GetByID(ctx context.Context, id int) (*model.FirmwareScan, error) {
+	args := m.Called(ctx, id)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*model.FirmwareScan), args.Error(1)
 }
 
-func (m *MockRepository) UpdateStatus(ctx context.Context, id int, status string) error {
-	args := m.Called(ctx, id, status)
-	return args.Error(0)
+func (m *MockRepository) GetByDeviceAndHash(ctx context.Context, deviceID, hash string) (*model.FirmwareScan, error) {
+	args := m.Called(ctx, deviceID, hash)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*model.FirmwareScan), args.Error(1)
 }
 
 func (m *MockRepository) UpdateResult(ctx context.Context, id int, status string, vulns []string) error {
@@ -132,11 +135,11 @@ func TestCreateScan(t *testing.T) {
 		now := time.Now()
 		scan := &model.FirmwareScan{DeviceID: "d1", BinaryHash: "h1"}
 		existing := &model.FirmwareScan{
-			ID:         1,
-			DeviceID:   "d1",
+			ID:        1,
+			DeviceID:  "d1",
 			BinaryHash: "h1",
-			CreatedAt:  now,
-			UpdatedAt:  now.Add(time.Second),
+			CreatedAt: now,
+			UpdatedAt: now.Add(time.Second),
 		}
 
 		db.On("Begin", ctx).Return(tx, nil)
@@ -231,5 +234,38 @@ func TestCreateScan(t *testing.T) {
 		result, err := svc.CreateScan(ctx, scan)
 		assert.Error(t, err)
 		assert.Nil(t, result)
+	})
+}
+
+func TestGetScan(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("success", func(t *testing.T) {
+		db := new(MockDB)
+		repo := new(MockRepository)
+		riverClient := new(MockRiverClient)
+		svc := NewFirmwareScanService(db, repo, riverClient)
+
+		expected := &model.FirmwareScan{ID: 1, DeviceID: "d1"}
+		repo.On("GetByID", ctx, 1).Return(expected, nil)
+
+		result, err := svc.GetScan(ctx, 1)
+		assert.NoError(t, err)
+		assert.Equal(t, expected, result)
+		repo.AssertExpectations(t)
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		db := new(MockDB)
+		repo := new(MockRepository)
+		riverClient := new(MockRiverClient)
+		svc := NewFirmwareScanService(db, repo, riverClient)
+
+		repo.On("GetByID", ctx, 999).Return(nil, pgx.ErrNoRows)
+
+		result, err := svc.GetScan(ctx, 999)
+		assert.ErrorIs(t, err, pgx.ErrNoRows)
+		assert.Nil(t, result)
+		repo.AssertExpectations(t)
 	})
 }

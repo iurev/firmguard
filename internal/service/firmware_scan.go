@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"errors"
 	"firmguard/internal/database"
 	"firmguard/internal/model"
 	"firmguard/internal/repository"
@@ -13,10 +12,9 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
-var ErrScanAlreadyExists = errors.New("scan already exists")
-
 type FirmwareScanService interface {
 	CreateScan(ctx context.Context, scan *model.FirmwareScan) (*model.FirmwareScan, error)
+	GetScan(ctx context.Context, id int) (*model.FirmwareScan, error)
 }
 
 type RiverClient interface {
@@ -64,4 +62,8 @@ func (s *firmwareScanService) CreateScan(ctx context.Context, scan *model.Firmwa
 	}
 
 	return res.Scan, nil
+}
+
+func (s *firmwareScanService) GetScan(ctx context.Context, id int) (*model.FirmwareScan, error) {
+	return s.repo.GetByID(ctx, id)
 }
