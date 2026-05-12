@@ -19,7 +19,7 @@ import (
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 )
 
-func gracefulShutdown(apiServer *http.Server, riverClient *river.Client[pgx.Tx], done chan bool) {
+func gracefulShutdown(apiServer *http.Server, riverClient *river.Client[pgx.Tx], db database.Service, done chan bool) {
 	// Create context that listens for the interrupt signal from the OS.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -43,6 +43,10 @@ func gracefulShutdown(apiServer *http.Server, riverClient *river.Client[pgx.Tx],
 
 	if err := apiServer.Shutdown(ctx); err != nil {
 		log.Printf("Server forced to shutdown with error: %v", err)
+	}
+
+	if err := db.Close(); err != nil {
+		log.Printf("DB close error: %v", err)
 	}
 
 	log.Println("Server exiting")
@@ -85,7 +89,7 @@ func main() {
 	done := make(chan bool, 1)
 
 	// Run graceful shutdown in a separate goroutine
-	go gracefulShutdown(server, riverClient, done)
+	go gracefulShutdown(server, riverClient, db, done)
 
 	err = server.ListenAndServe()
 	if err != nil && err != http.ErrServerClosed {
